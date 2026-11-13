@@ -1,0 +1,75 @@
+{
+  "expo": {
+    "name": "LineMap Pro",
+    "slug": "linemap-pro",
+    "scheme": "linemappro",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0F14",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.spottventures.linemappro",
+      "infoPlist": {
+        "NSCameraUsageDescription": "LineMap Pro uses the camera to photograph poles, handholes and cable plant for mapping.",
+        "NSLocationWhenInUseUsageDescription": "LineMap Pro records the GPS location of each photo to place it on the map.",
+        "NSPhotoLibraryUsageDescription": "LineMap Pro can import existing field photos into a project.",
+        "NSMicrophoneUsageDescription": "LineMap Pro uses the microphone so you can label nodes by voice.",
+        "NSSpeechRecognitionUsageDescription": "LineMap Pro converts your voice into node labels and notes."
+      }
+    },
+    "android": {
+      "package": "com.spottventures.linemappro",
+      "adaptiveIcon": {
+        "backgroundColor": "#0B0F14",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECORD_AUDIO"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "output": "single",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-sqlite",
+      "expo-sharing",
+      "expo-secure-store",
+      "expo-image",
+      "expo-font",
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "LineMap Pro uses the camera to photograph poles, handholes and cable plant for mapping."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "LineMap Pro records the GPS location of each photo to place it on the map."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "LineMap Pro uses the microphone so you can label nodes by voice.",
+          "speechRecognitionPermission": "LineMap Pro converts your voice into node labels and notes."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

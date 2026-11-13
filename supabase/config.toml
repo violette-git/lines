@@ -1,0 +1,18 @@
+# Minimal Supabase CLI config for LineMap Pro.
+# `supabase link --project-ref <ref>` connects this folder to your hosted project.
+project_id = "linemap-pro"
+
+[db]
+major_version = 17
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+# AI proxy: Supabase checks the caller's login token before the function runs.
+[functions.analyze-photo]
+verify_jwt = true
+
+# Stripe cannot send a Supabase login token; the function verifies the Stripe signature instead.
+[functions.stripe-webhook]
+verify_jwt = false

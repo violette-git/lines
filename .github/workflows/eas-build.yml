@@ -1,0 +1,27 @@
+# Cloud builds for iPhone (and Android store bundles) through Expo's EAS service.
+# Needs an EXPO_TOKEN repository secret, an Expo account, and for iOS an Apple Developer account.
+name: EAS Build
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "ios, android or all"
+        default: "ios"
+      profile:
+        description: "preview (install on test devices) or production (store)"
+        default: "preview"
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - run: eas build --platform ${{ github.event.inputs.platform }} --profile ${{ github.event.inputs.profile }} --non-interactive --no-wait
