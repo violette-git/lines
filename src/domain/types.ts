@@ -41,7 +41,16 @@ export interface GeoFix extends LatLng {
   samples: number;
   capturedAt: string;
   source: 'gps' | 'gps_avg' | 'manual' | 'external';
+  /** GNSS fix quality when known (external receivers report it; phone GPS is 'gps'). */
+  fixQuality?: FixQuality | null;
+  /** Horizontal dilution of precision from the receiver, when known. */
+  hdop?: number | null;
+  satellites?: number | null;
+  /** Receiver name/model for external fixes. */
+  receiver?: string | null;
 }
+
+export type FixQuality = 'none' | 'gps' | 'dgps' | 'rtk_float' | 'rtk_fixed' | 'ppp' | 'estimated' | 'manual';
 
 export type FieldValue = string | number | boolean | null;
 
@@ -78,6 +87,8 @@ export interface Project {
   templateId: string | null;
   /** When true, each new captured node auto-connects with a span to the previous node. */
   walkMode: boolean;
+  /** Company (organization) this project belongs to. Null/undefined = local-only project on this device. */
+  orgId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -183,6 +194,20 @@ export interface AppSettings {
   aiAutoRun: boolean;
   watermarkPhotos: boolean;
   proxyUrl: string | null;
+  /** Sync: only upload photos on Wi-Fi (field data still syncs on cellular). */
+  syncPhotosWifiOnly?: boolean;
+  /** Where positions come from: phone location services (includes receivers that feed the phone) or a direct TCP NMEA stream. */
+  gpsSource?: 'device' | 'external_tcp';
+  receiverHost?: string | null;
+  receiverPort?: number | null;
+  /** Antenna height above ground in meters (subtracted from altitude for external receivers). */
+  antennaHeightM?: number | null;
+  /** Warn before capture when an external receiver is not in RTK fixed. */
+  requireRtkFixed?: boolean;
+  /** Offline map tile provider id (see src/offline). */
+  offlineTileProvider?: string | null;
+  /** API key for a commercial tile provider (MapTiler etc). */
+  tileApiKey?: string | null;
 }
 
 export type Basemap = 'satellite' | 'streets' | 'hybrid';
@@ -198,4 +223,12 @@ export const DEFAULT_SETTINGS: AppSettings = {
   aiAutoRun: true,
   watermarkPhotos: true,
   proxyUrl: null,
+  syncPhotosWifiOnly: true,
+  gpsSource: 'device',
+  receiverHost: null,
+  receiverPort: null,
+  antennaHeightM: null,
+  requireRtkFixed: false,
+  offlineTileProvider: null,
+  tileApiKey: null,
 };
