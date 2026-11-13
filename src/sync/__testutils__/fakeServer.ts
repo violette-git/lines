@@ -98,6 +98,10 @@ export class FakeServer {
           out.push({ id, status: 'deleted', reason: 'parent_deleted', row: existing ?? null });
           continue;
         }
+        // Deletes win: a tombstone is never stale (same rule as sync_push).
+        if (deleting && existing && raw.client_updated_at && raw.client_updated_at < existing.client_updated_at) {
+          raw.client_updated_at = existing.client_updated_at;
+        }
         if (existing && raw.client_updated_at && raw.client_updated_at < existing.client_updated_at) {
           out.push({ id, status: 'stale', reason: 'newer_edit_on_server', row: existing });
           continue;

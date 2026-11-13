@@ -346,3 +346,58 @@ begin
   end;
 end $$;
 reset role;
+
+-- ---------- Same-project references and photo paths (0005_integrity.sql) ----------
+\set prj2 '5b000000-0000-4000-8000-0000000000b2'
+\set m1   '5b000000-0000-4000-8000-0000000000f1'
+select ts.login(:'sam', 'sam@sync.test'); set role authenticated;
+select public.sync_push(:'org_s', jsonb_build_object(
+  'projects', jsonb_build_array(ts.proj(:'prj2', :'org_s', null, 'Second St', '2026-11-03T10:00:00Z')),
+  'nodes', jsonb_build_array(ts.node(:'m1', :'org_s', :'prj2', 1, 'Q-1', '2026-11-03T10:00:01Z')))) as r \gset
+select ts.ok('second project and node pushed', ts.st(:'r', 'projects', :'prj2') = 'ok' and ts.st(:'r', 'nodes', :'m1') = 'ok');
+reset role;
+
+select ts.login(:'tina', 'tina@sync.test'); set role authenticated;
+select public.sync_push(:'org_s', jsonb_build_object(
+  'spans', jsonb_build_array(ts.span('5b000000-0000-4000-8000-0000000000d9', :'org_s', :'prj', :'n3', :'m1', '2026-11-03T11:00:00Z')))) as r \gset
+select ts.ok('span across projects refused', ts.st(:'r', 'spans', '5b000000-0000-4000-8000-0000000000d9') = 'rejected'
+  and ts.res(:'r', 'spans', '5b000000-0000-4000-8000-0000000000d9') ->> 'code' = '23514');
+select public.sync_push(:'org_s', jsonb_build_object(
+  'photos', jsonb_build_array(ts.photo('5b000000-0000-4000-8000-0000000000e9', :'org_s', :'prj', :'m1', '2026-11-03T11:00:00Z')))) as r \gset
+select ts.ok('photo on a node of another project refused', ts.st(:'r', 'photos', '5b000000-0000-4000-8000-0000000000e9') = 'rejected');
+select public.sync_push(:'org_s', jsonb_build_object('nodes', jsonb_build_array(
+  ts.node(:'n3', :'org_s', :'prj2', 3, 'MOVED', '2026-11-03T12:00:00Z')))) as r \gset
+select ts.ok('node cannot change project', ts.st(:'r', 'nodes', :'n3') = 'rejected'
+  and (select project_id from public.nodes where id = :'n3') = :'prj');
+select public.sync_push(:'org_s', jsonb_build_object('photos', jsonb_build_array(
+  ts.photo('5b000000-0000-4000-8000-0000000000ea', :'org_s', :'prj', :'n3', '2026-11-03T12:00:00Z')
+    || jsonb_build_object('storage_path', :'org_s' || '/' || :'prj' || '/../../' || :'org_o' || '/x/y.jpg')))) as r \gset
+select ts.ok('photo path with .. refused', ts.st(:'r', 'photos', '5b000000-0000-4000-8000-0000000000ea') = 'rejected');
+select public.sync_push(:'org_s', jsonb_build_object('photos', jsonb_build_array(
+  ts.photo('5b000000-0000-4000-8000-0000000000eb', :'org_s', :'prj', :'n3', '2026-11-03T12:00:00Z')
+    || jsonb_build_object('watermarked_path', :'org_s' || '/' || :'prj' || '/5b000000-0000-4000-8000-0000000000eb_wm.jpg')))) as r \gset
+select ts.ok('normal photo with watermark path accepted', ts.st(:'r', 'photos', '5b000000-0000-4000-8000-0000000000eb') = 'ok');
+select public.sync_push(:'org_s', jsonb_build_object('spans', jsonb_build_array(
+  ts.span('5b000000-0000-4000-8000-0000000000da', :'org_s', :'prj', :'n1', :'n3', '2026-11-03T12:00:00Z')))) as r \gset
+select ts.ok('span inside one project still accepted', ts.st(:'r', 'spans', '5b000000-0000-4000-8000-0000000000da') = 'ok');
+select ts.ok('re-pushing that span (no reference change) still ok', ts.st(public.sync_push(:'org_s', jsonb_build_object('spans', jsonb_build_array(
+  ts.span('5b000000-0000-4000-8000-0000000000da', :'org_s', :'prj', :'n1', :'n3', '2026-11-03T12:05:00Z')))),
+  'spans', '5b000000-0000-4000-8000-0000000000da') = 'ok');
+reset role;
+
+-- ---------- Deletes win over a later edit (no stale tombstone loop) ----------
+\set k1 '5b000000-0000-4000-8000-0000000000f2'
+select ts.login(:'sam', 'sam@sync.test'); set role authenticated;
+select ts.ok('node for delete race pushed', ts.st(public.sync_push(:'org_s', jsonb_build_object('nodes', jsonb_build_array(
+  ts.node(:'k1', :'org_s', :'prj', 20, 'K-1', '2026-11-04T09:00:00Z')))), 'nodes', :'k1') = 'ok');
+-- Sam edits at 10:00 (device clock); Tina deleted it offline at 09:30 and syncs afterwards.
+select ts.ok('later edit stored', ts.st(public.sync_push(:'org_s', jsonb_build_object('nodes', jsonb_build_array(
+  ts.node(:'k1', :'org_s', :'prj', 20, 'K-1 EDIT', '2026-11-04T10:00:00Z')))), 'nodes', :'k1') = 'ok');
+reset role;
+select ts.login(:'tina', 'tina@sync.test'); set role authenticated;
+select public.sync_push(:'org_s', jsonb_build_object('nodes', jsonb_build_array(
+  jsonb_build_object('id', :'k1', 'org_id', :'org_s', 'deleted_at', '2026-11-04T09:30:00Z',
+                     'client_updated_at', '2026-11-04T09:30:00Z')))) as r \gset
+select ts.ok('older tombstone still wins', ts.st(:'r', 'nodes', :'k1') = 'ok'
+  and (select deleted_at is not null from public.nodes where id = :'k1'));
+reset role;

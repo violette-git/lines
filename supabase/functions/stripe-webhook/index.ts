@@ -96,9 +96,38 @@ async function applySubscription(sub: Stripe.Subscription, eventCreated: number,
 
   const status = STATUSES.includes(sub.status) ? sub.status : 'incomplete';
   const eventAt = new Date(eventCreated * 1000).toISOString();
+  const customerId = idOf(sub.customer as string | { id: string });
+
+  // Cross-checks before touching the org (metadata is only a hint):
+  //  * an org already linked to a Stripe customer only accepts subscriptions of that customer, so
+  //    a subscription can never upgrade (or cancel) some other company;
+  //  * an event about an ended subscription must not overwrite a newer, different subscription.
+  const { data: current, error: curErr } = await admin
+    .from('organizations')
+    .select('id, stripe_customer_id, stripe_subscription_id')
+    .eq('id', orgId)
+    .maybeSingle();
+  if (curErr) throw new Error(`org lookup failed: ${curErr.message}`);
+  const cur = current as { id: string; stripe_customer_id: string | null; stripe_subscription_id: string | null } | null;
+  if (!cur) {
+    console.warn('stripe-webhook: unknown org for subscription', orgId, sub.id);
+    return null;
+  }
+  if (cur.stripe_customer_id && customerId && cur.stripe_customer_id !== customerId) {
+    console.error('stripe-webhook: subscription customer does not match the org, ignored', orgId, sub.id);
+    return null;
+  }
+  if (
+    cur.stripe_subscription_id &&
+    cur.stripe_subscription_id !== sub.id &&
+    (status === 'canceled' || status === 'incomplete_expired')
+  ) {
+    console.log('stripe-webhook: event for a replaced subscription, ignored', orgId, sub.id);
+    return orgId;
+  }
 
   const update: Record<string, unknown> = {
-    stripe_customer_id: idOf(sub.customer as string | { id: string }),
+    stripe_customer_id: customerId,
     stripe_subscription_id: sub.id,
     subscription_status: status,
     stripe_event_at: eventAt,
@@ -158,7 +187,13 @@ Deno.serve(async (request: Request): Promise<Response> => {
           : null;
         const customerId = idOf(session.customer as string | { id: string } | null);
         if (refOrg && customerId) {
-          const { error } = await admin.from('organizations').update({ stripe_customer_id: customerId }).eq('id', refOrg);
+          // Link only an org that has no customer yet; an org already linked keeps its customer
+          // (applySubscription then refuses a subscription of a different customer).
+          const { error } = await admin
+            .from('organizations')
+            .update({ stripe_customer_id: customerId })
+            .eq('id', refOrg)
+            .is('stripe_customer_id', null);
           if (error) throw new Error(`customer link failed: ${error.message}`);
         }
         const subId = idOf(session.subscription as string | { id: string } | null);

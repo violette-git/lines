@@ -183,6 +183,21 @@ describe('SyncEngine', () => {
     expect(await b.repo.listDirty({ orgId: ORG })).toEqual([]);
   });
 
+  test('deletes win: a local delete older than a server edit is applied, not re-pushed forever', async () => {
+    const server = new FakeServer();
+    const a = phone(server);
+    const b = phone(server);
+    await seedAndSync(a);
+    await b.engine.start();
+    // Someone (with a clock far ahead) edits n2; B deletes it before pulling that edit.
+    server.edit('nodes', 'n2', { label: 'edited later', client_updated_at: '2099-01-01T00:00:00.000Z' });
+    await b.repo.deleteNode('n2');
+    await b.engine.requestSync();
+    expect(server.tables.nodes.get('n2')?.deleted_at).toBeTruthy();
+    expect(await b.repo.getNode('n2')).toBeNull();
+    expect(await b.repo.listDirty({ orgId: ORG })).toEqual([]);
+  });
+
   test('failures back off exponentially, then recover', async () => {
     const server = new FakeServer();
     const a = phone(server);

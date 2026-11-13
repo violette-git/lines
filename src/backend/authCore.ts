@@ -285,6 +285,25 @@ export function safeNextPath(raw: unknown): string | null {
   if (p.startsWith('//') || p.startsWith('/\\')) return null;
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f\\]/.test(p)) return null;
-  if (/^\/auth(\/|$|\?)/.test(p)) return null;
+  // The path part may be decoded again later (by the router or the browser). Judge the fully
+  // decoded form too, so "/%2F%2Fevil.example", "/%5Cevil.example" and "/a/../..//evil.example"
+  // cannot turn into a link to another host.
+  const pathPart = p.split(/[?#]/)[0];
+  let decoded = pathPart;
+  for (let i = 0; i < 3; i++) {
+    let next: string;
+    try {
+      next = decodeURIComponent(decoded);
+    } catch {
+      return null;
+    }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  if (!decoded.startsWith('/') || decoded.startsWith('//')) return null;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f\\]/.test(decoded)) return null;
+  if (decoded.split('/').some((seg) => seg === '.' || seg === '..')) return null;
+  if (/^\/auth(\/|$|\?)/.test(decoded)) return null;
   return p;
 }

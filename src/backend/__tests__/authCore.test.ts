@@ -184,6 +184,8 @@ describe('safeNextPath', () => {
     ['/project/abc?tab=1', '/project/abc?tab=1'],
     ['  /admin/billing ', '/admin/billing'],
     [['/admin', '/x'], '/admin'],
+    ['/admin/billing?plan=pro&interval=month', '/admin/billing?plan=pro&interval=month'],
+    ['/project/a%20b?q=%2F%2Fx', '/project/a%20b?q=%2F%2Fx'],
   ])('allows app path %p', (raw, want) => {
     expect(safeNextPath(raw)).toBe(want);
   });
@@ -196,6 +198,14 @@ describe('safeNextPath', () => {
     '/auth/sign-in',
     '/auth',
     '/ok\nnope',
+    '/%2F%2Fevil.example',
+    '/%2f/evil.example',
+    '/%5Cevil.example',
+    '/%252F%252Fevil.example',
+    '/admin/../..//evil.example',
+    '/admin/%2E%2E/%2E%2E//evil.example',
+    '/%61uth/sign-in',
+    '/%E0%A4%A',
     '',
     undefined,
     null,

@@ -13,6 +13,15 @@ import {
 
 const t = { z: 16, x: 16964, y: 26284 };
 
+describe('getProvider', () => {
+  it('ignores inherited object keys sent by the map page', () => {
+    for (const id of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf']) {
+      expect(getProvider(id)).toBeNull();
+    }
+    expect(getProvider('test-osm')?.id).toBe('test-osm');
+  });
+});
+
 describe('provider table', () => {
   it('has the required providers with complete configs', () => {
     const ids = PROVIDERS.map((p) => p.id);

@@ -34,7 +34,8 @@
 --     and sync_push answers "stale" with the server's current row so the phone can converge.
 --   * Deletes win: once a row is tombstoned (deleted_at set), a live edit of it is refused with
 --     "deleted" and the tombstone is returned. Live rows whose project or node is tombstoned
---     are refused the same way. Restores are an office action (dashboard), not a phone action.
+--     are refused the same way. A tombstone is never "stale": it wins over a live edit even when
+--     that edit has a later device clock. Restores are an office action (dashboard), not a phone action.
 --   * Deleting a project tombstones its nodes, spans and photos; deleting a node tombstones its
 --     spans and photos, so other phones learn about every removed row.
 
@@ -246,6 +247,15 @@ begin
               else jsonb_build_object('id', v_id, 'status', 'deleted', 'reason', 'deleted', 'row', v_existing)
             end);
           continue;
+        end if;
+
+        if v_deleting and v_existing is not null then
+          -- Deletes win, even over a live edit with a later device clock: without this the
+          -- tombstone would come back "stale", the phone would keep its pending delete (it also
+          -- treats deletes as winning) and push it again on every sync, forever.
+          v_row := jsonb_set(v_row, '{client_updated_at}', to_jsonb(greatest(
+            coalesce((v_row ->> 'client_updated_at')::timestamptz, now()),
+            (v_existing ->> 'client_updated_at')::timestamptz)));
         end if;
 
         if not v_deleting then

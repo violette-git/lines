@@ -2,6 +2,7 @@ import { randomUUID } from 'expo-crypto';
 import { create } from 'zustand';
 
 import { applyAiResult, createAiClient } from '@/ai';
+import { getAiConsent } from '@/components/prefs';
 import { getPhotoStore, getRepository } from '@/data';
 import type { SyncTable } from '@/domain/contracts';
 import { makeLabel } from '@/domain/labels';
@@ -582,6 +583,10 @@ export const useStore = create<State>((set, get) => {
       const node = get().nodes.find((n) => n.id === nodeId);
       const photo = get().photos.find((p) => p.nodeId === nodeId && p.isPrimary) ?? get().photos.find((p) => p.nodeId === nodeId);
       if (!node || !photo) return;
+      // Hard gate for every path (capture auto-run, run pending, buttons): no photo leaves the
+      // device until the user has agreed in the app. Screens ask with ensureAiConsent first; a node
+      // captured without consent stays ai_pending and can be run later.
+      if (get().settings.aiMode === 'off' || !(await getAiConsent().catch(() => null))) return;
       const client = await createAiClient(get().settings);
       if (!client) return;
       await get().updateNode(nodeId, { status: 'ai_pending' });

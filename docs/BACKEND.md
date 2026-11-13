@@ -30,6 +30,7 @@ explained the first time they appear.
 | Path | What it is |
 | --- | --- |
 | `supabase/migrations/0001_init.sql` | Creates every table, security rule, trigger and helper function. |
+| `supabase/migrations/0005_integrity.sql` | Photo object paths must be `<org>/<project>/<file>`; spans and photos may only reference nodes of their own project; nodes cannot change project. |
 | `supabase/seed.sql` | Demo data for a local test database only (one demo org, no real people). |
 | `supabase/config.toml` | Supabase CLI settings: JWT check ON for analyze-photo, OFF for stripe-webhook. |
 | `supabase/functions/analyze-photo/index.ts` | AI proxy: checks login, subscription and quota, calls Claude, records usage. |

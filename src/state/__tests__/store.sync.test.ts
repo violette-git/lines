@@ -17,6 +17,9 @@ jest.mock('@/data', () => {
 let mockUuid = 0;
 jest.mock('expo-crypto', () => ({ randomUUID: () => `00000000-0000-4000-8000-${String(++mockUuid).padStart(12, '0')}` }));
 
+// The user agreed to AI photo analysis (store.runAi refuses to run without it).
+jest.mock('@/components/prefs', () => ({ getAiConsent: async () => ({ at: '2026-11-01T00:00:00.000Z' }) }));
+
 // AI client whose answer the test releases by hand.
 const mockAi = { release: null as null | ((v: unknown) => void), calls: [] as string[] };
 jest.mock('@/ai', () => ({

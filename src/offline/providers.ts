@@ -184,7 +184,8 @@ export const PROVIDERS: TileProvider[] = [
 export const PROVIDER_BY_ID: Record<string, TileProvider> = Object.fromEntries(PROVIDERS.map((p) => [p.id, p]));
 
 export function getProvider(id: string | null | undefined): TileProvider | null {
-  return id ? PROVIDER_BY_ID[id] ?? null : null;
+  // Own keys only: ids come from the map page ("lmtile://constructor/..." must not find Object's members).
+  return id && Object.prototype.hasOwnProperty.call(PROVIDER_BY_ID, id) ? PROVIDER_BY_ID[id] : null;
 }
 
 /** Real network URL for a tile. Returns null when the provider needs a key and none is set. */
