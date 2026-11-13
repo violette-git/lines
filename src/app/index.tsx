@@ -1,11 +1,14 @@
 // Projects home: weekly totals, search and filters, project cards, and a big "New project" button.
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, TextInput, useWindowDimensions, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, Text, TextInput, useWindowDimensions, View, type StyleProp, type TextStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { canManageProjectsNow, useAuth, useCanManageProjects } from '@/backend/authStore';
 import { ActionSheet, type SheetAction } from '@/components/ActionSheet';
+import { LOGO_TILE } from '@/components/brand';
 import { confirmAsync } from '@/components/confirm';
 import { EmptyState } from '@/components/EmptyState';
 import { formatCount, formatMoney, relativeTime, WORK_TYPE_META } from '@/components/format';
@@ -15,6 +18,7 @@ import { useProjectStats, type ProjectStats } from '@/components/useProjectStats
 import type { Project } from '@/domain/types';
 import { formatLength } from '@/geo';
 import { useStore } from '@/state/store';
+import { SyncChip } from '@/sync';
 import { colors, font, radius, shadow, space, TOUCH } from '@/theme';
 
 type Filter = Project['status'];
@@ -38,6 +42,17 @@ export default function ProjectsHome() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('active');
   const [menuFor, setMenuFor] = useState<Project | null>(null);
+
+  // New projects go to the active company only when the store says so (sync wiring turns that off
+  // for roles that cannot create company projects, which then create local projects instead).
+  const newProjectOrgId = useStore((s) => (s.createProjectsInOrg ? s.activeOrgId : null));
+  const canCreate = useCanManageProjects(newProjectOrgId ?? null);
+  const backendEnabled = useAuth((s) => s.backendEnabled);
+  const signedIn = useAuth((s) => s.session != null);
+  // Re-render the open menu when roles change (sign out, company switch).
+  useAuth((s) => s.role);
+  const narrow = width < 400;
+  const iconSize = narrow ? 44 : 46;
 
   const sorted = useMemo(() => [...projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), [projects]);
   const { stats } = useProjectStats(sorted);
@@ -76,9 +91,13 @@ export default function ProjectsHome() {
     return { ft, nodes, earnings: hasEarnings ? earnings : null, activeCount: active.length };
   }, [projects, stats]);
 
-  const menuActions: SheetAction[] = menuFor
+  // Local projects (no orgId) are always manageable; company projects need manager or above.
+  const canManageMenu = menuFor ? canManageProjectsNow(menuFor.orgId ?? null) : false;
+  const openAction: SheetAction[] = menuFor
+    ? [{ key: 'open', label: 'Open map', icon: 'map-outline', onPress: () => router.push(`/project/${menuFor.id}`) }]
+    : [];
+  const manageActions: SheetAction[] = menuFor && canManageMenu
     ? [
-        { key: 'open', label: 'Open map', icon: 'map-outline', onPress: () => router.push(`/project/${menuFor.id}`) },
         {
           key: 'edit',
           label: 'Edit details',
@@ -125,10 +144,11 @@ export default function ProjectsHome() {
         },
       ]
     : [];
+  const menuActions: SheetAction[] = [...openAction, ...manageActions];
 
   const header = (
     <Column style={{ gap: space.lg }}>
-      <WeekBand ft={week.ft} nodes={week.nodes} earnings={week.earnings} activeCount={week.activeCount} units={units} />
+      <WeekBand ft={week.ft} nodes={week.nodes} earnings={week.earnings} activeCount={week.activeCount} units={units} narrow={narrow} />
       <View style={{ gap: space.md }}>
         <View style={styles.search}>
           <Ionicons name="search" size={20} color={colors.textMuted} />
@@ -169,7 +189,7 @@ export default function ProjectsHome() {
       title="Map your first run"
       body="Create a project, then walk the route snapping a photo at each pole or handhole. Footage adds up as you go."
     >
-      <Button title="New project" icon="add" onPress={() => router.push('/project/new')} />
+      {canCreate ? <Button title="New project" icon="add" onPress={() => router.push('/project/new')} /> : null}
       <Button title="How it works" kind="secondary" icon="play-circle-outline" onPress={() => router.push('/onboarding')} />
     </EmptyState>
   ) : query.trim() ? (
@@ -196,17 +216,27 @@ export default function ProjectsHome() {
       <View style={[styles.topBar, { paddingTop: insets.top + space.sm, paddingLeft: insets.left + space.lg, paddingRight: insets.right + space.lg }]}>
         <Column style={styles.topBarInner}>
           <View style={styles.brand}>
-            <View style={styles.logo}>
-              <Ionicons name="git-network" size={20} color={colors.onAccent} />
-            </View>
-            <T v="title" numberOfLines={1}>
-              LineMap <T v="title" color={colors.accent}>Pro</T>
-            </T>
+            <Image source={LOGO_TILE} style={styles.logo} contentFit="contain" accessibilityLabel="LineMap Pro logo" />
+            {/* Phones under 400 dp wide keep the mark only, so the header buttons fit. */}
+            {narrow ? null : (
+              <T v="title" numberOfLines={1}>
+                LineMap <T v="title" color={colors.accent}>Pro</T>
+              </T>
+            )}
           </View>
-          <View style={styles.topActions}>
-            <IconButton icon="albums-outline" label="Client templates" size={46} onPress={() => router.push('/templates')} />
-            <IconButton icon="help-circle-outline" label="Help" size={46} onPress={() => router.push('/help')} />
-            <IconButton icon="settings-outline" label="Settings" size={46} onPress={() => router.push('/settings')} />
+          <View style={[styles.topActions, narrow && { gap: 6 }]}>
+            <SyncChip compact />
+            <IconButton icon="albums-outline" label="Client templates" size={iconSize} onPress={() => router.push('/templates')} />
+            <IconButton icon="help-circle-outline" label="Help" size={iconSize} onPress={() => router.push('/help')} />
+            <IconButton icon="settings-outline" label="Settings" size={iconSize} onPress={() => router.push('/settings')} />
+            {backendEnabled ? (
+              <IconButton
+                icon="person-circle-outline"
+                label={signedIn ? 'Account' : 'Sign in'}
+                size={iconSize}
+                onPress={() => router.push((signedIn ? '/account' : '/auth/sign-in') as never)}
+              />
+            ) : null}
           </View>
         </Column>
       </View>
@@ -227,24 +257,26 @@ export default function ProjectsHome() {
         ItemSeparatorComponent={() => <View style={{ height: space.md }} />}
         renderItem={({ item }) => (
           <Column>
-            <ProjectCard project={item} stats={stats[item.id]} units={units} onMenu={() => setMenuFor(item)} />
+            <ProjectCard project={item} stats={stats[item.id]} units={units} narrow={narrow} onMenu={() => setMenuFor(item)} />
           </Column>
         )}
       />
 
-      <View pointerEvents="box-none" style={[styles.fabWrap, { bottom: insets.bottom + space.lg, right: fabRight }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="New project"
-          onPress={() => router.push('/project/new')}
-          style={({ pressed }) => [styles.fab, { opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] }]}
-        >
-          <Ionicons name="add" size={28} color={colors.onAccent} />
-          <T v="heading" color={colors.onAccent} style={{ fontSize: 17 }}>
-            New project
-          </T>
-        </Pressable>
-      </View>
+      {canCreate ? (
+        <View pointerEvents="box-none" style={[styles.fabWrap, { bottom: insets.bottom + space.lg, right: fabRight }]}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="New project"
+            onPress={() => router.push('/project/new')}
+            style={({ pressed }) => [styles.fab, { opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.97 : 1 }] }]}
+          >
+            <Ionicons name="add" size={28} color={colors.onAccent} />
+            <T v="heading" color={colors.onAccent} style={{ fontSize: 17 }}>
+              New project
+            </T>
+          </Pressable>
+        </View>
+      ) : null}
 
       <ActionSheet
         visible={!!menuFor}
@@ -263,12 +295,14 @@ function WeekBand({
   earnings,
   activeCount,
   units,
+  narrow,
 }: {
   ft: number;
   nodes: number;
   earnings: number | null;
   activeCount: number;
   units: 'imperial' | 'metric';
+  narrow: boolean;
 }) {
   return (
     <View style={styles.band}>
@@ -284,22 +318,25 @@ function WeekBand({
         </T>
       </View>
       <View style={styles.bandStats}>
-        <BandStat value={formatLength(ft, units)} label="Footage" />
+        <BandStat value={formatLength(ft, units)} label="Footage" narrow={narrow} />
         <View style={styles.bandDivider} />
-        <BandStat value={formatCount(nodes)} label="Nodes" />
+        <BandStat value={formatCount(nodes)} label="Nodes" narrow={narrow} />
         <View style={styles.bandDivider} />
-        <BandStat value={earnings == null ? '--' : formatMoney(earnings)} label="Est. earnings" color={earnings == null ? colors.textFaint : colors.success} />
+        <BandStat
+          value={earnings == null ? '--' : formatMoney(earnings)}
+          label="Est. earnings"
+          color={earnings == null ? colors.textFaint : colors.success}
+          narrow={narrow}
+        />
       </View>
     </View>
   );
 }
 
-function BandStat({ value, label, color }: { value: string; label: string; color?: string }) {
+function BandStat({ value, label, color, narrow }: { value: string; label: string; color?: string; narrow?: boolean }) {
   return (
-    <View style={{ flex: 1, gap: 2 }}>
-      <T v="title" color={color ?? colors.text} style={[font.mono, styles.bandValue]} numberOfLines={1}>
-        {value}
-      </T>
+    <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+      <FitText style={[font.mono, styles.bandValue, narrow && { fontSize: 17 }, { color: color ?? colors.text }]}>{value}</FitText>
       <T v="caption" color={colors.textMuted} numberOfLines={1}>
         {label}
       </T>
@@ -311,11 +348,13 @@ function ProjectCard({
   project,
   stats,
   units,
+  narrow,
   onMenu,
 }: {
   project: Project;
   stats: ProjectStats | undefined;
   units: 'imperial' | 'metric';
+  narrow: boolean;
   onMenu: () => void;
 }) {
   const wt = WORK_TYPE_META[project.workType];
@@ -355,10 +394,10 @@ function ProjectCard({
       </View>
 
       <View style={styles.cardStats}>
-        <CardStat barColor={colors.textMuted} value={t ? formatCount(t.nodeCount) : '...'} label="Nodes" />
-        <CardStat barColor={colors.aerial} value={t ? formatLength(t.aerialFt, units) : '...'} label="Aerial" />
-        <CardStat barColor={colors.underground} value={t ? formatLength(t.undergroundFt, units) : '...'} label="Underground" />
-        {t?.earnings != null ? <CardStat barColor={colors.success} value={formatMoney(t.earnings)} label="Earned" color={colors.success} /> : null}
+        <CardStat barColor={colors.textMuted} value={t ? formatCount(t.nodeCount) : '...'} label="Nodes" narrow={narrow} />
+        <CardStat barColor={colors.aerial} value={t ? formatLength(t.aerialFt, units) : '...'} label="Aerial" narrow={narrow} />
+        <CardStat barColor={colors.underground} value={t ? formatLength(t.undergroundFt, units) : '...'} label={narrow ? 'Undergr.' : 'Underground'} narrow={narrow} />
+        {t?.earnings != null ? <CardStat barColor={colors.success} value={formatMoney(t.earnings)} label="Earned" color={colors.success} narrow={narrow} /> : null}
       </View>
 
       <View style={styles.cardFoot}>
@@ -382,17 +421,33 @@ function ProjectCard({
   );
 }
 
-function CardStat({ barColor, value, label, color }: { barColor: string; value: string; label: string; color?: string }) {
+function CardStat({ barColor, value, label, color, narrow }: { barColor: string; value: string; label: string; color?: string; narrow?: boolean }) {
   return (
     <View style={[styles.cardStat, label === 'Nodes' && { flex: 0.7 }]}>
       <View style={{ width: 18, height: 3, borderRadius: 2, backgroundColor: barColor, marginBottom: 4 }} />
-      <T v="heading" color={color ?? colors.text} style={font.mono} numberOfLines={1}>
-        {value}
-      </T>
+      <FitText style={[font.heading, font.mono, narrow && { fontSize: 13 }, { fontWeight: '700', color: color ?? colors.text }]}>{value}</FitText>
       <T v="caption" color={colors.textMuted} numberOfLines={1}>
         {label}
       </T>
     </View>
+  );
+}
+
+/**
+ * One line of text that shrinks to fit instead of cutting off with "...". Native shrinks the font
+ * (adjustsFontSizeToFit); web has no auto-shrink, so callers pass a smaller size on narrow screens.
+ */
+function FitText({ style, children }: { style: StyleProp<TextStyle>; children: string }) {
+  return (
+    <Text
+      style={style}
+      numberOfLines={1}
+      adjustsFontSizeToFit={Platform.OS !== 'web'}
+      minimumFontScale={0.6}
+      ellipsizeMode={Platform.OS === 'web' ? 'clip' : 'tail'}
+    >
+      {children}
+    </Text>
   );
 }
 
@@ -412,8 +467,8 @@ const styles = StyleSheet.create({
   topBar: { paddingBottom: space.sm, backgroundColor: colors.bg, borderBottomWidth: 1, borderBottomColor: colors.border },
   topBarInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: space.md },
   brand: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flexShrink: 1 },
-  logo: { width: 34, height: 34, borderRadius: radius.sm, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
-  topActions: { flexDirection: 'row', gap: space.sm },
+  logo: { width: 34, height: 34, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border },
+  topActions: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   band: {
     borderRadius: radius.lg,
     borderWidth: 1,

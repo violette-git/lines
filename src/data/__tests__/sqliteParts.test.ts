@@ -99,13 +99,14 @@ describe('migration runner', () => {
   test('applies only newer migrations in order', async () => {
     const { db, versions } = fakeDb();
     await runMigrations(db);
+    const top = Math.max(...MIGRATIONS.map((m) => m.version));
     const extra = [
       ...MIGRATIONS,
-      { version: 4, description: 'd', statements: ['SELECT 4'] },
-      { version: 3, description: 'c', statements: ['SELECT 3'] },
+      { version: top + 2, description: 'd', statements: ['SELECT 4'] },
+      { version: top + 1, description: 'c', statements: ['SELECT 3'] },
     ];
-    expect(await runMigrations(db, extra)).toEqual([3, 4]);
-    expect(versions).toEqual([1, 2, 3, 4]);
+    expect(await runMigrations(db, extra)).toEqual([top + 1, top + 2]);
+    expect(versions).toEqual([...MIGRATIONS.map((m) => m.version), top + 1, top + 2]);
   });
 
   test('migration versions are unique and increasing', () => {

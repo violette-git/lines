@@ -23,6 +23,7 @@ export function SpanSheet({
   onSnapChange,
   onClose,
   onSelectNode,
+  readOnly,
 }: {
   span: SpanWithLength | null;
   nodesById: Map<string, MapNode>;
@@ -31,6 +32,8 @@ export function SpanSheet({
   onSnapChange: (s: SheetSnap) => void;
   onClose: () => void;
   onSelectNode: (id: string) => void;
+  /** View-only role: values as text, no editing or deleting. */
+  readOnly?: boolean;
 }) {
   const updateSpan = useStore((s) => s.updateSpan);
   const deleteSpan = useStore((s) => s.deleteSpan);
@@ -75,74 +78,90 @@ export function SpanSheet({
 
   return (
     <BottomSheet visible snap={snap} onSnapChange={onSnapChange} onClose={onClose} header={header} peekHeight={176}>
-      <View style={{ gap: space.md, paddingTop: space.sm }}>
-        <Segmented<SpanKind>
-          value={span.kind}
-          onChange={(kind) => {
-            if (kind === span.kind) return;
-            // Underground runs have no sag; aerial gets the usual 2% unless one is already set.
-            const sagPct = kind === 'underground' ? 0 : span.sagPct > 0 ? span.sagPct : 2;
-            void updateSpan(span.id, { kind, sagPct });
-          }}
-          options={[
-            { value: 'aerial', label: 'Aerial', icon: 'git-commit-outline' },
-            { value: 'underground', label: 'Underground', icon: 'remove-outline' },
-          ]}
-        />
-        <Stepper
-          label="Sag allowance"
-          value={span.sagPct}
-          min={0}
-          max={10}
-          step={0.5}
-          format={(v) => `${v}%`}
-          onChange={(v) => void updateSpan(span.id, { sagPct: v })}
-        />
-        <NumberRow
-          label="Slack / storage loops"
-          suffix="ft"
-          value={span.slackFt}
-          allowEmpty={false}
-          onCommit={(v) => void updateSpan(span.id, { slackFt: v ?? 0 })}
-        />
-        <NumberRow
-          label="Measured footage (wheel / sequential)"
-          suffix="ft"
-          value={span.lengthOverrideFt}
-          allowEmpty
-          placeholder="Use GPS"
-          hint="Overrides the GPS length. Clear it to go back to GPS footage."
-          onCommit={(v) => void updateSpan(span.id, { lengthOverrideFt: v })}
-        />
-
-        <T v="label" color={colors.textMuted} style={{ marginTop: space.sm }}>
-          SPAN DETAILS
-        </T>
-        {SPAN_FIELDS.map((def) => (
-          <FieldEditor
-            key={def.key}
-            def={def}
-            value={span.fields[def.key]}
-            onChange={(v) => void updateSpan(span.id, { fields: { ...span.fields, [def.key]: v } })}
+      {readOnly ? (
+        <View style={{ gap: space.md, paddingTop: space.sm }}>
+          <View style={styles.numbers}>
+            <Num label="Sag allowance" value={`${span.sagPct}%`} />
+            <Num label="Slack" value={formatLength(span.slackFt, units)} />
+            <Num label="Measured" value={span.lengthOverrideFt != null ? formatLength(span.lengthOverrideFt, units) : 'Not set'} />
+          </View>
+          <T v="label" color={colors.textMuted} style={{ marginTop: space.sm }}>
+            SPAN DETAILS
+          </T>
+          {SPAN_FIELDS.map((def) => (
+            <FieldEditor key={def.key} def={def} value={span.fields[def.key]} onChange={() => undefined} readOnly />
+          ))}
+        </View>
+      ) : (
+        <View style={{ gap: space.md, paddingTop: space.sm }}>
+          <Segmented<SpanKind>
+            value={span.kind}
+            onChange={(kind) => {
+              if (kind === span.kind) return;
+              // Underground runs have no sag; aerial gets the usual 2% unless one is already set.
+              const sagPct = kind === 'underground' ? 0 : span.sagPct > 0 ? span.sagPct : 2;
+              void updateSpan(span.id, { kind, sagPct });
+            }}
+            options={[
+              { value: 'aerial', label: 'Aerial', icon: 'git-commit-outline' },
+              { value: 'underground', label: 'Underground', icon: 'remove-outline' },
+            ]}
           />
-        ))}
+          <Stepper
+            label="Sag allowance"
+            value={span.sagPct}
+            min={0}
+            max={10}
+            step={0.5}
+            format={(v) => `${v}%`}
+            onChange={(v) => void updateSpan(span.id, { sagPct: v })}
+          />
+          <NumberRow
+            label="Slack / storage loops"
+            suffix="ft"
+            value={span.slackFt}
+            allowEmpty={false}
+            onCommit={(v) => void updateSpan(span.id, { slackFt: v ?? 0 })}
+          />
+          <NumberRow
+            label="Measured footage (wheel / sequential)"
+            suffix="ft"
+            value={span.lengthOverrideFt}
+            allowEmpty
+            placeholder="Use GPS"
+            hint="Overrides the GPS length. Clear it to go back to GPS footage."
+            onCommit={(v) => void updateSpan(span.id, { lengthOverrideFt: v })}
+          />
 
-        <Button
-          title="Delete span"
-          icon="trash-outline"
-          kind="ghost"
-          onPress={async () => {
-            const ok = await confirmAsync('Delete span?', `Removes the line between ${from?.label ?? '?'} and ${to?.label ?? '?'}.`, {
-              confirmText: 'Delete',
-              destructive: true,
-            });
-            if (ok) {
-              await deleteSpan(span.id);
-              onClose();
-            }
-          }}
-        />
-      </View>
+          <T v="label" color={colors.textMuted} style={{ marginTop: space.sm }}>
+            SPAN DETAILS
+          </T>
+          {SPAN_FIELDS.map((def) => (
+            <FieldEditor
+              key={def.key}
+              def={def}
+              value={span.fields[def.key]}
+              onChange={(v) => void updateSpan(span.id, { fields: { ...span.fields, [def.key]: v } })}
+            />
+          ))}
+
+          <Button
+            title="Delete span"
+            icon="trash-outline"
+            kind="ghost"
+            onPress={async () => {
+              const ok = await confirmAsync('Delete span?', `Removes the line between ${from?.label ?? '?'} and ${to?.label ?? '?'}.`, {
+                confirmText: 'Delete',
+                destructive: true,
+              });
+              if (ok) {
+                await deleteSpan(span.id);
+                onClose();
+              }
+            }}
+          />
+        </View>
+      )}
     </BottomSheet>
   );
 }

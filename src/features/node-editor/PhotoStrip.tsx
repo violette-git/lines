@@ -1,10 +1,11 @@
 // Node photos: large preview, original/watermarked toggle, thumbnails, set primary, add more.
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { useEffect, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Button, Segmented, T } from '@/components/ui';
 import type { PhotoRef } from '@/domain/types';
+import { usePhotoUri } from '@/sync';
 import { colors, radius, space } from '@/theme';
 
 export function PhotoStrip({
@@ -13,12 +14,15 @@ export function PhotoStrip({
   onAddLibrary,
   onSetPrimary,
   adding,
+  readOnly,
 }: {
   photos: PhotoRef[];
   onAddCamera: () => void;
   onAddLibrary: () => void;
   onSetPrimary: (photoId: string) => void;
   adding: boolean;
+  /** Hides add and set-primary actions (view-only roles). */
+  readOnly?: boolean;
 }) {
   const sorted = [...photos].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary) || a.takenAt.localeCompare(b.takenAt));
   const [selectedId, setSelectedId] = useState<string | null>(sorted[0]?.id ?? null);
@@ -29,12 +33,20 @@ export function PhotoStrip({
     if (!selectedId && sorted[0]) setSelectedId(sorted[0].id);
   }, [selectedId, sorted]);
 
-  const uri = selected ? (view === 'watermarked' && selected.watermarkedUri ? selected.watermarkedUri : selected.uri) : null;
+  // Company photos from other phones download on demand (usePhotoUri); local ones show at once.
+  const hasStamp = !!(selected?.watermarkedUri || selected?.watermarkedPath);
+  const shown = usePhotoUri(selected, { watermarked: view === 'watermarked' && hasStamp });
+  const uri = shown.uri;
   const aspect = selected && selected.width > 0 && selected.height > 0 ? selected.width / selected.height : 4 / 3;
 
   return (
     <View style={{ gap: space.sm }}>
-      {selected && uri ? (
+      {selected && !uri && shown.loading ? (
+        <View style={[styles.preview, styles.empty]}>
+          <ActivityIndicator color={colors.accent} />
+          <T color={colors.textMuted}>Loading photo...</T>
+        </View>
+      ) : selected && uri ? (
         <View style={[styles.preview, { aspectRatio: Math.max(0.6, Math.min(1.8, aspect)) }]}>
           <Image source={{ uri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
           {selected.isPrimary ? (
@@ -55,7 +67,7 @@ export function PhotoStrip({
 
       {selected ? (
         <View style={styles.row}>
-          {selected.watermarkedUri ? (
+          {hasStamp ? (
             <View style={{ flex: 1 }}>
               <Segmented
                 value={view}
@@ -71,7 +83,7 @@ export function PhotoStrip({
               GPS stamp pending or off
             </T>
           )}
-          {!selected.isPrimary ? (
+          {!selected.isPrimary && !readOnly ? (
             <Button title="Set primary" icon="star-outline" kind="secondary" compact onPress={() => onSetPrimary(selected.id)} />
           ) : null}
         </View>
@@ -86,7 +98,7 @@ export function PhotoStrip({
             onPress={() => setSelectedId(p.id)}
             style={[styles.thumbWrap, p.id === selected?.id && { borderColor: colors.accent }]}
           >
-            <Image source={{ uri: p.watermarkedUri ?? p.uri }} style={styles.thumb} />
+            <Thumb photo={p} />
             {p.isPrimary ? (
               <View style={styles.star}>
                 <Ionicons name="star" size={12} color={colors.accent} />
@@ -94,29 +106,38 @@ export function PhotoStrip({
             ) : null}
           </Pressable>
         ))}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Take another photo"
-          onPress={onAddCamera}
-          disabled={adding}
-          style={[styles.thumbWrap, styles.addTile]}
-        >
-          <Ionicons name="camera" size={24} color={colors.text} />
-          <T v="caption">Camera</T>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add photo from library"
-          onPress={onAddLibrary}
-          disabled={adding}
-          style={[styles.thumbWrap, styles.addTile]}
-        >
-          <Ionicons name="images-outline" size={24} color={colors.text} />
-          <T v="caption">Library</T>
-        </Pressable>
+        {readOnly ? null : (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Take another photo"
+              onPress={onAddCamera}
+              disabled={adding}
+              style={[styles.thumbWrap, styles.addTile]}
+            >
+              <Ionicons name="camera" size={24} color={colors.text} />
+              <T v="caption">Camera</T>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Add photo from library"
+              onPress={onAddLibrary}
+              disabled={adding}
+              style={[styles.thumbWrap, styles.addTile]}
+            >
+              <Ionicons name="images-outline" size={24} color={colors.text} />
+              <T v="caption">Library</T>
+            </Pressable>
+          </>
+        )}
       </ScrollView>
     </View>
   );
+}
+
+function Thumb({ photo }: { photo: PhotoRef }) {
+  const { uri } = usePhotoUri(photo, { watermarked: true });
+  return uri ? <Image source={{ uri }} style={styles.thumb} /> : <View style={[styles.thumb, { backgroundColor: colors.surfaceAlt }]} />;
 }
 
 const styles = StyleSheet.create({

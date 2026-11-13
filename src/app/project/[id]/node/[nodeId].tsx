@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useCanEdit } from '@/backend/authStore';
 import { Button, Card, SectionTitle, T } from '@/components/ui';
 import { NODE_SCHEMAS, NODE_TYPE_META } from '@/domain/nodeSchemas';
 import type { NodeType } from '@/domain/types';
@@ -23,6 +24,7 @@ import {
 import { successHaptic } from '@/features/common/haptics';
 import { goBackOr, ScreenHeader } from '@/features/common/ScreenHeader';
 import { useToast } from '@/features/common/Toast';
+import { ensureAiConsent } from '@/features/consent/AiConsentDialog';
 import { RecalibratePanel } from '@/features/gps/RecalibratePanel';
 import { useRecalibrate } from '@/features/gps/useRecalibrate';
 import { aiSummary, friendlyAiError } from '@/features/map-screen/aiStatus';
@@ -53,6 +55,9 @@ export default function NodeEditorScreen() {
   const template = project?.templateId ? templates.find((t) => t.id === project.templateId) ?? null : null;
   const recal = useRecalibrate();
   const units = settings.units;
+  // Viewers see every value but cannot change anything. Local projects (no orgId) are always editable.
+  const canEdit = useCanEdit(project ? project.orgId ?? null : null);
+  const readOnly = !canEdit;
 
   // Deep link support: open the project if needed.
   const [opening, setOpening] = useState(activeProjectId !== id);
@@ -134,6 +139,12 @@ export default function NodeEditorScreen() {
     }
   };
 
+  const runAiNow = async () => {
+    // Asks for AI consent first on installs that turned AI on before consent existed.
+    if (!(await ensureAiConsent())) return;
+    void runAi(node.id);
+  };
+
   const remove = async () => {
     const ok = await confirmAsync(`Delete ${node.label}?`, 'The node, its photos and any connected spans will be removed.', {
       confirmText: 'Delete',
@@ -155,7 +166,14 @@ export default function NodeEditorScreen() {
         subtitle={`${typeLabel(node.type)}  |  #${node.seq}${project ? `  |  ${project.name}` : ''}`}
         onBack={back}
         right={
-          node.status === 'reviewed' ? (
+          readOnly ? (
+            <View style={styles.reviewedTag}>
+              <Ionicons name="eye-outline" size={16} color={colors.textMuted} />
+              <T v="caption" color={colors.textMuted}>
+                View only
+              </T>
+            </View>
+          ) : node.status === 'reviewed' ? (
             <View style={styles.reviewedTag}>
               <Ionicons name="checkmark-done" size={16} color={colors.success} />
               <T v="caption" color={colors.success}>
@@ -173,15 +191,20 @@ export default function NodeEditorScreen() {
           <PhotoStrip
             photos={photos}
             adding={adding}
+            readOnly={readOnly}
             onAddCamera={() => void addPhoto('camera')}
             onAddLibrary={() => void addPhoto('library')}
             onSetPrimary={(photoId) => void setPrimaryPhoto(node.id, photoId).catch((e) => toast.show(errorMessage(e), { kind: 'error' }))}
           />
 
           <SectionTitle>Type</SectionTitle>
-          <View style={{ marginHorizontal: -space.md }}>
-            <TypeChips value={node.type} onChange={changeType} dense />
-          </View>
+          {readOnly ? (
+            <T v="heading">{NODE_TYPE_META[node.type].label}</T>
+          ) : (
+            <View style={{ marginHorizontal: -space.md }}>
+              <TypeChips value={node.type} onChange={changeType} dense />
+            </View>
+          )}
 
           <SectionTitle>Label</SectionTitle>
           <View style={styles.inputRow}>
@@ -194,6 +217,7 @@ export default function NodeEditorScreen() {
                 commitLabel();
               }}
               onSubmitEditing={() => commitLabel()}
+              editable={!readOnly}
               style={[styles.input, styles.labelInput]}
               placeholder="Label"
               placeholderTextColor={colors.textFaint}
@@ -201,17 +225,19 @@ export default function NodeEditorScreen() {
               returnKeyType="done"
               accessibilityLabel="Label"
             />
-            <MicButton
-              label="Speak label"
-              onResult={(_t, parsed) => {
-                if (parsed.type && parsed.type !== node.type) setSuggestType(parsed.type);
-                if (parsed.rest) {
-                  const v = parsed.rest.toUpperCase();
-                  setLabel(v);
-                  commitLabel(v);
-                }
-              }}
-            />
+            {readOnly ? null : (
+              <MicButton
+                label="Speak label"
+                onResult={(_t, parsed) => {
+                  if (parsed.type && parsed.type !== node.type) setSuggestType(parsed.type);
+                  if (parsed.rest) {
+                    const v = parsed.rest.toUpperCase();
+                    setLabel(v);
+                    commitLabel(v);
+                  }
+                }}
+              />
+            )}
           </View>
           {suggestType ? (
             <View style={styles.suggest}>
@@ -257,9 +283,11 @@ export default function NodeEditorScreen() {
                         Low confidence: {ai.lowConfidence.map((k) => schema.find((f) => f.key === k)?.label ?? k).join(', ')}
                       </T>
                     ) : null}
-                    <T v="caption" color={colors.textMuted}>
-                      Tap Accept on a field to confirm it, or edit it to override.
-                    </T>
+                    {readOnly ? null : (
+                      <T v="caption" color={colors.textMuted}>
+                        Tap Accept on a field to confirm it, or edit it to override.
+                      </T>
+                    )}
                   </>
                 ) : null}
                 {node.aiReport && !aiError ? (
@@ -290,13 +318,13 @@ export default function NodeEditorScreen() {
                         : 'Not analyzed yet.'}
                   </T>
                 ) : null}
-                {settings.aiMode !== 'off' && node.status !== 'ai_pending' ? (
+                {!readOnly && settings.aiMode !== 'off' && node.status !== 'ai_pending' ? (
                   <Button
                     title={node.status === 'ai_failed' ? 'Retry AI' : ai.filled > 0 ? 'Run AI again' : 'Run AI'}
                     icon="sparkles"
                     kind="secondary"
                     compact
-                    onPress={() => void runAi(node.id)}
+                    onPress={() => void runAiNow()}
                   />
                 ) : null}
               </Card>
@@ -312,6 +340,7 @@ export default function NodeEditorScreen() {
                 value={node.fields[def.key]}
                 meta={node.aiMeta[def.key]}
                 required={required.has(def.key)}
+                readOnly={readOnly}
                 onChange={(v) => void setNodeField(node.id, def.key, v)}
                 onAccept={() => void setNodeField(node.id, def.key, node.fields[def.key] ?? null)}
               />
@@ -329,19 +358,22 @@ export default function NodeEditorScreen() {
                 commitNotes();
               }}
               multiline
+              editable={!readOnly}
               style={[styles.input, { minHeight: 96, paddingTop: space.md, textAlignVertical: 'top' }]}
-              placeholder="Anything the office should know"
+              placeholder={readOnly ? 'No notes' : 'Anything the office should know'}
               placeholderTextColor={colors.textFaint}
               accessibilityLabel="Notes"
             />
-            <MicButton
-              label="Speak notes"
-              onResult={(text) => {
-                const v = notes ? `${notes} ${text}` : text;
-                setNotes(v);
-                commitNotes(v);
-              }}
-            />
+            {readOnly ? null : (
+              <MicButton
+                label="Speak notes"
+                onResult={(text) => {
+                  const v = notes ? `${notes} ${text}` : text;
+                  setNotes(v);
+                  commitNotes(v);
+                }}
+              />
+            )}
           </View>
 
           <SectionTitle>GPS</SectionTitle>
@@ -351,20 +383,22 @@ export default function NodeEditorScreen() {
               <Kv k="Longitude" v={formatLatLng(p.lng)} mono />
               <Kv k="Accuracy" v={formatAccuracy(p.accuracyM, units)} color={accuracyColor(p.accuracyM)} mono />
               <Kv k="Samples" v={String(p.samples)} mono />
-              <Kv k="Source" v={sourceLabel(p.source)} />
+              <Kv k="Source" v={sourceLabel(p)} />
               <Kv k="Captured" v={formatDateTime(p.capturedAt)} />
               {p.altitudeM != null ? <Kv k="Altitude" v={units === 'metric' ? `${p.altitudeM.toFixed(1)} m` : `${Math.round(p.altitudeM / 0.3048)} ft`} mono /> : null}
             </View>
-            <RecalibratePanel
-              nodeId={node.id}
-              recal={recal}
-              units={units}
-              onDone={(ok) => ok && toast.show('Position updated.', { kind: 'success' })}
-            />
+            {readOnly ? null : (
+              <RecalibratePanel
+                nodeId={node.id}
+                recal={recal}
+                units={units}
+                onDone={(ok) => ok && toast.show('Position updated.', { kind: 'success' })}
+              />
+            )}
           </Card>
 
           <View style={{ gap: space.sm, marginTop: space.xl }}>
-            {node.status !== 'reviewed' ? (
+            {!readOnly && node.status !== 'reviewed' ? (
               <Button
                 title="Mark reviewed"
                 icon="checkmark-done"
@@ -376,7 +410,7 @@ export default function NodeEditorScreen() {
               />
             ) : null}
             <Button title="Back to map" icon="map-outline" kind="secondary" onPress={() => router.navigate(`/project/${id}` as never)} />
-            <Button title="Delete node" icon="trash-outline" kind="ghost" onPress={remove} />
+            {readOnly ? null : <Button title="Delete node" icon="trash-outline" kind="ghost" onPress={remove} />}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

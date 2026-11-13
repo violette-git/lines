@@ -2,21 +2,121 @@
   "expo": {
     "name": "LineMap Pro",
     "slug": "linemap-pro",
+    "description": "Field mapping for cable and fiber crews: photo, GPS, node on the map, span footage, AI auto-fill and exports.",
     "scheme": "linemappro",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "backgroundColor": "#0B0F14",
+    "primaryColor": "#FFB020",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.spottventures.linemappro",
+      "associatedDomains": [
+        "applinks:linemap.pro"
+      ],
+      "config": {
+        "usesNonExemptEncryption": false
+      },
       "infoPlist": {
-        "NSCameraUsageDescription": "LineMap Pro uses the camera to photograph poles, handholes and cable plant for mapping.",
-        "NSLocationWhenInUseUsageDescription": "LineMap Pro records the GPS location of each photo to place it on the map.",
-        "NSPhotoLibraryUsageDescription": "LineMap Pro can import existing field photos into a project.",
-        "NSMicrophoneUsageDescription": "LineMap Pro uses the microphone so you can label nodes by voice.",
-        "NSSpeechRecognitionUsageDescription": "LineMap Pro converts your voice into node labels and notes."
+        "NSCameraUsageDescription": "LineMap Pro uses the camera to photograph poles, handholes, pedestals and other cable plant so each photo becomes a node on your map.",
+        "NSLocationWhenInUseUsageDescription": "LineMap Pro uses your precise location while the app is open to place each photo and node on the map and to measure span footage. Location is not tracked in the background.",
+        "NSPhotoLibraryUsageDescription": "LineMap Pro lets you choose existing field photos from your library to add them to a project. It only reads the photos you pick.",
+        "NSMicrophoneUsageDescription": "LineMap Pro uses the microphone only after you tap a microphone button, so you can say a node label or note instead of typing it.",
+        "NSSpeechRecognitionUsageDescription": "LineMap Pro turns what you say into node labels and notes using Apple speech recognition, which may send the audio to Apple to transcribe it.",
+        "NSLocalNetworkUsageDescription": "LineMap Pro connects to a GPS or GNSS receiver on your local Wi-Fi network to get survey-grade positions. It does not scan or contact other devices."
+      },
+      "privacyManifests": {
+        "NSPrivacyTracking": false,
+        "NSPrivacyTrackingDomains": [],
+        "NSPrivacyAccessedAPITypes": [
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryUserDefaults",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "CA92.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "C617.1",
+              "0A2A.1",
+              "3B52.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategorySystemBootTime",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "35F9.1"
+            ]
+          },
+          {
+            "NSPrivacyAccessedAPIType": "NSPrivacyAccessedAPICategoryDiskSpace",
+            "NSPrivacyAccessedAPITypeReasons": [
+              "E174.1",
+              "85F4.1"
+            ]
+          }
+        ],
+        "NSPrivacyCollectedDataTypes": [
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeName",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeEmailAddress",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeUserID",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypePreciseLocation",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypePhotosorVideos",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeProductInteraction",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          },
+          {
+            "NSPrivacyCollectedDataType": "NSPrivacyCollectedDataTypeOtherUserContent",
+            "NSPrivacyCollectedDataTypeLinked": true,
+            "NSPrivacyCollectedDataTypeTracking": false,
+            "NSPrivacyCollectedDataTypePurposes": [
+              "NSPrivacyCollectedDataTypePurposeAppFunctionality"
+            ]
+          }
+        ]
       }
     },
     "android": {
@@ -31,40 +131,112 @@
         "CAMERA",
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "ACCESS_NETWORK_STATE",
+        "INTERNET",
+        "VIBRATE"
       ],
+      "blockedPermissions": [
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
+        "android.permission.ACTIVITY_RECOGNITION",
+        "android.permission.FOREGROUND_SERVICE_LOCATION"
+      ],
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "linemap.pro",
+              "pathPrefix": "/org/join"
+            },
+            {
+              "scheme": "https",
+              "host": "linemap.pro",
+              "pathPrefix": "/invite"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ],
+      "allowBackup": false,
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png",
       "output": "single",
-      "bundler": "metro"
+      "bundler": "metro",
+      "name": "LineMap Pro",
+      "shortName": "LineMap",
+      "description": "Field mapping for cable and fiber crews.",
+      "themeColor": "#0B0F14",
+      "backgroundColor": "#0B0F14",
+      "lang": "en"
     },
     "plugins": [
       "expo-router",
       "expo-sqlite",
       "expo-sharing",
-      "expo-secure-store",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ],
       "expo-image",
       "expo-font",
       "expo-asset",
       [
         "expo-camera",
         {
-          "cameraPermission": "LineMap Pro uses the camera to photograph poles, handholes and cable plant for mapping."
+          "cameraPermission": "LineMap Pro uses the camera to photograph poles, handholes, pedestals and other cable plant so each photo becomes a node on your map.",
+          "barcodeScannerEnabled": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "LineMap Pro lets you choose existing field photos from your library to add them to a project. It only reads the photos you pick.",
+          "cameraPermission": "LineMap Pro uses the camera to photograph poles, handholes, pedestals and other cable plant so each photo becomes a node on your map.",
+          "microphonePermission": "LineMap Pro uses the microphone only after you tap a microphone button, so you can say a node label or note instead of typing it."
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "LineMap Pro records the GPS location of each photo to place it on the map."
+          "locationWhenInUsePermission": "LineMap Pro uses your precise location while the app is open to place each photo and node on the map and to measure span footage. Location is not tracked in the background.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false,
+          "motionUsagePermission": false,
+          "locationFullAccuracyPermission": "Precise location places each pole, handhole and span where it really is. Approximate location can be off by hundreds of feet, which makes footage wrong.",
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false
         }
       ],
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "LineMap Pro uses the microphone so you can label nodes by voice.",
-          "speechRecognitionPermission": "LineMap Pro converts your voice into node labels and notes."
+          "microphonePermission": "LineMap Pro uses the microphone only after you tap a microphone button, so you can say a node label or note instead of typing it.",
+          "speechRecognitionPermission": "LineMap Pro turns what you say into node labels and notes using Apple speech recognition, which may send the audio to Apple to transcribe it."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0B0F14",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain"
         }
       ]
     ],

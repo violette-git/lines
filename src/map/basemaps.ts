@@ -1,21 +1,27 @@
-// Basemap configuration. This is the ONLY place tile providers are defined; swap providers here.
+// Basemap configuration for the live map.
 //
-// PRODUCTION NOTE: the public Esri World Imagery and OpenStreetMap tile endpoints below are fine for
-// development and light field testing, but their terms do not allow heavy production traffic
-// (OSM tile usage policy forbids it outright for apps). Before release, move to a commercial provider
-// (MapTiler, Mapbox, Esri with an ArcGIS Location Platform key, etc.):
-//   1. Put the key in an env var such as EXPO_PUBLIC_MAPTILER_KEY and read it into TILE_API_KEY below.
-//   2. Replace the `tiles` URL templates in IMAGERY / STREETS / REFERENCE with the provider URLs,
-//      e.g. `https://api.maptiler.com/tiles/satellite-v2/{z}/{x}/{y}.jpg?key=${TILE_API_KEY}`.
-//   3. Update the attribution strings to the provider's required text.
+// Tile providers are defined in src/offline/providers.ts (one table for the map, the native tile cache
+// and offline downloads). This file turns the user's map source setting into maplibre raster styles:
+//   - settings.offlineTileProvider + settings.tileApiKey set (for example MapTiler with a key): that
+//     provider family draws every basemap it has (satellite, hybrid, streets), online and offline.
+//   - nothing set, or a key missing: the public development endpoints below (Esri World Imagery and
+//     OpenStreetMap). Their terms do not allow heavy production traffic or offline storage
+//     (the OSM tile usage policy forbids app traffic outright), so ship with a commercial provider.
+// On native, providers that allow offline caching load through the WebView "lmtile://" protocol so
+// tiles come from the phone's tile cache (src/offline/tileHost.ts). The web build always uses plain URLs.
 // Styles are built as plain raster sources so no glyph/sprite servers are needed.
 
 import type { Basemap } from '@/domain/types';
 
+import { ENV_TILE_API_KEY, effectiveApiKey, protocolTemplate, resolveProvider, type TileProvider } from '@/offline/providers';
+
 import type { CoreBasemap } from './core/mapCore';
 
-/** Commercial tile provider key goes here (see note above). Empty = use the public dev endpoints. */
-export const TILE_API_KEY = '';
+/**
+ * Build-time fallback key (EXPO_PUBLIC_MAPTILER_KEY). The in-app setting (settings.tileApiKey) wins.
+ * Empty = use the public dev endpoints unless the user entered a key.
+ */
+export const TILE_API_KEY = ENV_TILE_API_KEY;
 
 /** Max zoom the camera allows; imagery overzooms past its native max. */
 export const MAP_MAX_ZOOM = 21;
@@ -132,7 +138,46 @@ function previewGrid(): CoreBasemap {
   };
 }
 
-export function getBasemap(id: Basemap): CoreBasemap {
+export interface BasemapOptions {
+  /** settings.offlineTileProvider */
+  providerId?: string | null;
+  /** settings.tileApiKey (falls back to TILE_API_KEY) */
+  apiKey?: string | null;
+  /** Native WebView only: route cacheable providers through the lmtile:// protocol. */
+  useTileProtocol?: boolean;
+}
+
+/** Small stable string hash so a key change re-applies the basemap without putting the key in ids. */
+function hashString(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
+function providerBasemap(id: Basemap, p: TileProvider, key: string, useTileProtocol: boolean): CoreBasemap {
+  const cached = useTileProtocol && p.allowsOfflineCaching;
+  const tiles = cached
+    ? [protocolTemplate(p)]
+    : p.urlTemplates.map((t) => t.replace('{key}', encodeURIComponent(key)));
+  const source: RasterSource = {
+    type: 'raster',
+    tiles,
+    tileSize: p.tileSize,
+    minzoom: p.minZoom,
+    maxzoom: p.maxZoom,
+    attribution: p.attribution,
+  };
+  return {
+    id: `${id}:${p.id}:${cached ? 'cache' : 'net'}:${hashString(key)}`,
+    sources: { 'bm-imagery': source },
+    layers: [imageryLayer],
+  };
+}
+
+export function getBasemap(id: Basemap, opts?: BasemapOptions): CoreBasemap {
   if (IS_PREVIEW_BUILD) return previewGrid();
+  const key = effectiveApiKey(opts?.apiKey);
+  const p = resolveProvider(id, opts?.providerId, key);
+  if (p) return providerBasemap(id, p, key, !!opts?.useTileProtocol);
   return BASEMAPS[id] ?? BASEMAPS.hybrid;
 }

@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   apk:
     runs-on: ubuntu-latest
@@ -30,3 +32,13 @@ jobs:
         with:
           name: linemap-pro-apk
           path: android/app/build/outputs/apk/release/*.apk
+      - name: Publish to the "latest" release (stable download link for phones)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls android/app/build/outputs/apk/release/*.apk | head -1)
+          cp "$APK" LineMapPro.apk
+          gh release view latest >/dev/null 2>&1 || gh release create latest --prerelease --title "Latest Android build" --notes "Built automatically from main. Install LineMapPro.apk on an Android phone."
+          gh release upload latest LineMapPro.apk --clobber
+          gh release edit latest --notes "Built automatically from main at ${GITHUB_SHA::7} on $(date -u +'%Y-%m-%d %H:%M UTC'). Install LineMapPro.apk on an Android phone."

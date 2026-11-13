@@ -8,11 +8,13 @@ import type { MapNode, PhotoRef, SpanWithLength } from '@/domain/types';
 import { confirmAsync } from '@/features/common/confirm';
 import { accuracyColor, formatAccuracy, sourceLabel, type Units } from '@/features/common/format';
 import { Stepper } from '@/features/common/Stepper';
+import { ensureAiConsent } from '@/features/consent/AiConsentDialog';
 import { RecalibratePanel } from '@/features/gps/RecalibratePanel';
 import { useRecalibrate } from '@/features/gps/useRecalibrate';
 import { BottomSheet, type SheetSnap } from '@/features/sheets/BottomSheet';
 import { formatLength } from '@/geo';
 import { useStore } from '@/state/store';
+import { usePhotoUri } from '@/sync';
 import { colors, font, radius, space } from '@/theme';
 
 import { aiSummary, friendlyAiError } from './aiStatus';
@@ -31,6 +33,7 @@ export function NodeSheet({
   onSelectSpan,
   onSelectNode,
   onDeleted,
+  readOnly,
 }: {
   node: MapNode | null;
   photo: PhotoRef | null;
@@ -45,6 +48,8 @@ export function NodeSheet({
   onSelectSpan: (id: string) => void;
   onSelectNode: (id: string) => void;
   onDeleted: () => void;
+  /** View-only role: details only, no editing, connecting, AI runs or deleting. */
+  readOnly?: boolean;
 }) {
   const aiError = useStore((s) => (node ? s.aiErrors[node.id] : undefined));
   const aiMode = useStore((s) => s.settings.aiMode);
@@ -53,6 +58,8 @@ export function NodeSheet({
   const deleteNode = useStore((s) => s.deleteNode);
   const clearDuplicateFlag = useStore((s) => s.clearDuplicateFlag);
   const recal = useRecalibrate();
+  // Company photos from other phones download on demand.
+  const { uri: shownUri } = usePhotoUri(photo, { watermarked: true });
 
   if (!node) return <BottomSheet visible={false} snap={snap} onSnapChange={onSnapChange} onClose={onClose} />;
 
@@ -60,7 +67,12 @@ export function NodeSheet({
   const dup = node.possibleDuplicateOf ? nodesById.get(node.possibleDuplicateOf) ?? null : null;
   const connected = spans.filter((s) => s.fromNodeId === node.id || s.toNodeId === node.id);
   const ai = aiSummary(node);
-  const shownUri = photo?.watermarkedUri ?? photo?.uri ?? null;
+
+  const run = () => {
+    void (async () => {
+      if (await ensureAiConsent()) await runAi(node.id);
+    })();
+  };
 
   const remove = async () => {
     const ok = await confirmAsync(`Delete ${node.label}?`, 'The node, its photos and any spans connected to it will be removed.', {
@@ -105,8 +117,14 @@ export function NodeSheet({
         </Pressable>
       </View>
       <View style={styles.quick}>
-        <Button title="Edit details" icon="create-outline" compact onPress={() => onEdit(node.id)} style={{ flex: 1 }} />
-        <Button title="Connect" icon="git-commit-outline" kind="secondary" compact onPress={() => onConnectFrom(node.id)} style={{ flex: 1 }} />
+        {readOnly ? (
+          <Button title="View details" icon="document-text-outline" kind="secondary" compact onPress={() => onEdit(node.id)} style={{ flex: 1 }} />
+        ) : (
+          <>
+            <Button title="Edit details" icon="create-outline" compact onPress={() => onEdit(node.id)} style={{ flex: 1 }} />
+            <Button title="Connect" icon="git-commit-outline" kind="secondary" compact onPress={() => onConnectFrom(node.id)} style={{ flex: 1 }} />
+          </>
+        )}
       </View>
     </View>
   );
@@ -125,10 +143,12 @@ export function NodeSheet({
                 </T>
               </T>
             </View>
-            <View style={styles.quick}>
-              <Button title="Keep both" kind="secondary" compact onPress={() => void clearDuplicateFlag(node.id)} style={{ flex: 1 }} />
-              <Button title="Delete this one" kind="danger" compact onPress={remove} style={{ flex: 1 }} />
-            </View>
+            {readOnly ? null : (
+              <View style={styles.quick}>
+                <Button title="Keep both" kind="secondary" compact onPress={() => void clearDuplicateFlag(node.id)} style={{ flex: 1 }} />
+                <Button title="Delete this one" kind="danger" compact onPress={remove} style={{ flex: 1 }} />
+              </View>
+            )}
             <Pressable onPress={() => onSelectNode(dup.id)} accessibilityRole="button">
               <T v="caption" color={colors.textMuted}>
                 Show {dup.label} on the map
@@ -142,7 +162,7 @@ export function NodeSheet({
           hasPhoto={!!photo}
           aiMode={aiMode}
           error={aiError}
-          onRun={() => void runAi(node.id)}
+          onRun={readOnly ? undefined : run}
           summary={ai}
         />
 
@@ -152,7 +172,7 @@ export function NodeSheet({
           </T>
           {connected.length === 0 ? (
             <T v="caption" color={colors.textFaint}>
-              Not connected. Tap Connect, then tap another node.
+              {readOnly ? 'Not connected.' : 'Not connected. Tap Connect, then tap another node.'}
             </T>
           ) : (
             connected.map((s) => {
@@ -184,23 +204,27 @@ export function NodeSheet({
             GPS
           </T>
           <T v="caption" color={colors.textMuted}>
-            {sourceLabel(node.position.source)}
+            {sourceLabel(node.position)}
             {node.position.samples > 1 ? `, ${node.position.samples} samples` : ''}
           </T>
-          <RecalibratePanel nodeId={node.id} recal={recal} units={units} compact />
+          {readOnly ? null : <RecalibratePanel nodeId={node.id} recal={recal} units={units} compact />}
         </View>
 
-        <Stepper
-          label="Icon size"
-          value={node.iconScale}
-          min={0.5}
-          max={3}
-          step={0.25}
-          format={(v) => `${v.toFixed(2).replace(/0$/, '')}x`}
-          onChange={(v) => void updateNode(node.id, { iconScale: v })}
-        />
+        {readOnly ? null : (
+          <>
+            <Stepper
+              label="Icon size"
+              value={node.iconScale}
+              min={0.5}
+              max={3}
+              step={0.25}
+              format={(v) => `${v.toFixed(2).replace(/0$/, '')}x`}
+              onChange={(v) => void updateNode(node.id, { iconScale: v })}
+            />
 
-        <Button title="Delete node" icon="trash-outline" kind="ghost" onPress={remove} />
+            <Button title="Delete node" icon="trash-outline" kind="ghost" onPress={remove} />
+          </>
+        )}
       </View>
     </BottomSheet>
   );
@@ -261,7 +285,8 @@ function AiCard({
   hasPhoto: boolean;
   aiMode: 'off' | 'direct' | 'proxy';
   error: string | undefined;
-  onRun: () => void;
+  /** Omitted for view-only roles. */
+  onRun?: () => void;
   summary: ReturnType<typeof aiSummary>;
 }) {
   if (!hasPhoto) return null;
@@ -280,7 +305,7 @@ function AiCard({
         <T style={{ flex: 1 }} v="caption">
           {friendlyAiError(error)}
         </T>
-        <Button title="Retry" icon="refresh" compact kind="secondary" onPress={onRun} />
+        {onRun ? <Button title="Retry" icon="refresh" compact kind="secondary" onPress={onRun} /> : null}
       </Card>
     );
   }
@@ -296,10 +321,10 @@ function AiCard({
           <T v="caption" color={colors.textMuted}>
             {summary.estimates > 0 ? `${summary.estimates} visual estimate${summary.estimates === 1 ? '' : 's'}. ` : ''}
             {summary.lowConfidence.length > 0 ? `${summary.lowConfidence.length} low confidence, check them. ` : ''}
-            Review in Edit details.
+            {onRun ? 'Review in Edit details.' : ''}
           </T>
         </View>
-        <Button title="Re-run" compact kind="ghost" onPress={onRun} />
+        {onRun ? <Button title="Re-run" compact kind="ghost" onPress={onRun} /> : null}
       </Card>
     );
   }
@@ -316,7 +341,7 @@ function AiCard({
       <T style={{ flex: 1 }} v="caption">
         {node.status === 'ai_done' ? 'AI found nothing it could fill confidently.' : 'Not analyzed yet.'}
       </T>
-      <Button title="Run AI" icon="sparkles" compact kind="secondary" onPress={onRun} />
+      {onRun ? <Button title="Run AI" icon="sparkles" compact kind="secondary" onPress={onRun} /> : null}
     </Card>
   );
 }

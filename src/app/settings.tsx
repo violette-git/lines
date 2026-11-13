@@ -1,17 +1,24 @@
-// App settings: units, map, GPS, duplicates, photos, AI, about.
+// App settings: account, units, map, GPS, duplicates, photos, AI (with consent), legal, about.
 import Ionicons from '@expo/vector-icons/Ionicons';
 import Constants from 'expo-constants';
+import { Image } from 'expo-image';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { getApiKey, setApiKey } from '@/ai/keyStore';
+import { useActiveOrg, useAuth } from '@/backend/authStore';
+import { RoleBadge } from '@/backend/authUi';
+import { LOGO_TILE } from '@/components/brand';
 import { confirmAsync, notify } from '@/components/confirm';
 import { PageScroll } from '@/components/Page';
 import { Button, Card, Chip, Field, IconButton, SectionTitle, Segmented, T, ToggleRow } from '@/components/ui';
 import type { AppSettings, Basemap } from '@/domain/types';
+import { formatDateTime } from '@/features/common/format';
+import { ensureAiConsent, requestAiConsent, useAiConsent } from '@/features/consent/AiConsentDialog';
 import { formatLength } from '@/geo';
 import { useStore } from '@/state/store';
+import { syncNow, useSyncStatus } from '@/sync';
 import { colors, font, radius, space, TOUCH } from '@/theme';
 
 const GPS_OPTIONS: { s: number; title: string; body: string }[] = [
@@ -69,8 +76,14 @@ export default function SettingsScreen() {
   const gps = GPS_OPTIONS.find((o) => o.s === settings.gpsAverageSeconds);
   const version = Constants.expoConfig?.version ?? '1.0.0';
 
+  const signedIn = useAuth((s) => s.session != null);
+
   return (
     <PageScroll>
+      <AccountCard />
+
+      <SyncSection wifiOnly={settings.syncPhotosWifiOnly !== false} onWifiOnly={(syncPhotosWifiOnly) => set({ syncPhotosWifiOnly })} />
+
       <SectionTitle>Units</SectionTitle>
       <Segmented
         value={settings.units}
@@ -124,6 +137,12 @@ export default function SettingsScreen() {
             })}
           </View>
         </View>
+        <LinkRow
+          icon="cloud-download-outline"
+          title="Offline maps and map source"
+          body="Download map areas for no-signal work, and choose where map imagery comes from."
+          onPress={() => router.push('/offline-maps' as never)}
+        />
       </Card>
 
       <SectionTitle>GPS</SectionTitle>
@@ -148,6 +167,16 @@ export default function SettingsScreen() {
             </View>
           </View>
         ) : null}
+        <LinkRow
+          icon="radio-outline"
+          title="GPS receiver"
+          body={
+            settings.gpsSource === 'external_tcp'
+              ? `Using an external receiver${settings.receiverHost ? ` at ${settings.receiverHost}` : ''}. Tap to change or check its status.`
+              : 'Using phone location. Connect an RTK receiver for centimeter-level positions.'
+          }
+          onPress={() => router.push('/gps-receiver' as never)}
+        />
       </Card>
 
       <SectionTitle>Duplicate check</SectionTitle>
@@ -178,14 +207,19 @@ export default function SettingsScreen() {
         />
       </Card>
 
-      <AiSection settings={settings} set={set} />
+      <AiSection settings={settings} set={set} signedIn={signedIn} />
+
+      <SectionTitle>Legal and support</SectionTitle>
+      <Card style={{ gap: space.xs, paddingVertical: space.sm }}>
+        <LinkRow icon="shield-checkmark-outline" title="Privacy policy" body="What we collect, why, and your choices." onPress={() => router.push('/legal/privacy')} />
+        <LinkRow icon="document-text-outline" title="Terms of use" body="The rules for using LineMap Pro, including field safety." onPress={() => router.push('/legal/terms')} />
+        <LinkRow icon="help-buoy-outline" title="Support" body="Common questions and how to reach us." onPress={() => router.push('/support')} />
+      </Card>
 
       <SectionTitle>About</SectionTitle>
       <Card style={{ gap: space.md }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.md }}>
-          <View style={styles.logo}>
-            <Ionicons name="git-network" size={22} color={colors.onAccent} />
-          </View>
+          <Image source={LOGO_TILE} style={styles.logo} contentFit="contain" accessibilityLabel="LineMap Pro logo" />
           <View style={{ flex: 1 }}>
             <T v="heading">LineMap Pro</T>
             <T v="caption" color={colors.textMuted} style={font.mono}>
@@ -198,15 +232,36 @@ export default function SettingsScreen() {
           <Button title="Replay intro" kind="secondary" icon="play-circle-outline" compact onPress={() => router.push('/onboarding')} />
         </View>
         <T v="caption" color={colors.textFaint}>
-          All projects and photos are stored on this device. Export regularly to keep a copy.
+          {signedIn
+            ? 'Company projects sync to your company when you have signal, and a copy stays on this device for offline work. Projects you keep local stay only on this device; export them regularly to keep a copy.'
+            : 'You are not signed in, so all projects and photos stay on this device. Export regularly to keep a copy, or sign in to sync projects with your company.'}
         </T>
       </Card>
     </PageScroll>
   );
 }
 
-function AiSection({ settings, set }: { settings: AppSettings; set: (p: Partial<AppSettings>) => void }) {
+function AiSection({ settings, set, signedIn }: { settings: AppSettings; set: (p: Partial<AppSettings>) => void; signedIn: boolean }) {
   const off = settings.aiMode === 'off';
+  const backendEnabled = useAuth((s) => s.backendEnabled);
+  const consent = useAiConsent();
+
+  // Existing installs that turned AI on before consent was asked: ask once here (decline turns AI off).
+  useEffect(() => {
+    if (consent === null && settings.aiMode !== 'off') void ensureAiConsent();
+    // Only when the loaded consent state first arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consent]);
+
+  const changeMode = async (aiMode: AppSettings['aiMode']) => {
+    if (aiMode === settings.aiMode) return;
+    if (aiMode !== 'off' && !consent) {
+      // Photos may only leave the device after the user agrees in the app.
+      const answer = await requestAiConsent(aiMode);
+      if (answer !== 'accepted') return;
+    }
+    set({ aiMode });
+  };
   return (
     <>
       <SectionTitle>AI auto-fill</SectionTitle>
@@ -217,15 +272,31 @@ function AiSection({ settings, set }: { settings: AppSettings; set: (p: Partial<
         </T>
         <Segmented<AppSettings['aiMode']>
           value={settings.aiMode}
-          onChange={(aiMode) => set({ aiMode })}
+          onChange={(aiMode) => void changeMode(aiMode)}
           options={[
             { value: 'off', label: 'Off', icon: 'close-circle-outline' },
             { value: 'direct', label: 'My key', icon: 'key-outline' },
             { value: 'proxy', label: 'Company', icon: 'business-outline' },
           ]}
         />
+        {backendEnabled && !signedIn ? (
+          <View style={styles.explain}>
+            <Ionicons name="business-outline" size={18} color={colors.textMuted} />
+            <View style={{ flex: 1, gap: space.sm }}>
+              <T v="caption" color={colors.textMuted}>
+                Sign in to use company AI. Your company pays for it and keeps the AI key off crew devices.
+              </T>
+              <Button title="Sign in" kind="secondary" icon="log-in-outline" compact onPress={() => router.push('/auth/sign-in' as never)} style={{ alignSelf: 'flex-start' }} />
+            </View>
+          </View>
+        ) : null}
         {settings.aiMode === 'direct' ? <ApiKeyEditor /> : null}
         {settings.aiMode === 'proxy' ? <ProxyEditor value={settings.proxyUrl} onSave={(proxyUrl) => set({ proxyUrl })} /> : null}
+        {consent ? (
+          <T v="caption" color={colors.textFaint}>
+            You agreed to AI photo analysis on {formatDateTime(consent.at)}. Photos go to Anthropic only while AI is on.
+          </T>
+        ) : null}
       </Card>
 
       <View style={[{ gap: space.sm, marginTop: space.md }, off && { opacity: 0.45 }]} pointerEvents={off ? 'none' : 'auto'}>
@@ -278,6 +349,153 @@ function AiSection({ settings, set }: { settings: AppSettings; set: (p: Partial<
         </Card>
       </View>
     </>
+  );
+}
+
+function AccountCard() {
+  const backendEnabled = useAuth((s) => s.backendEnabled);
+  const restored = useAuth((s) => s.restored);
+  const email = useAuth((s) => s.user?.email ?? null);
+  const signedIn = useAuth((s) => s.session != null);
+  const role = useAuth((s) => s.role);
+  const org = useActiveOrg();
+
+  if (!backendEnabled) {
+    return (
+      <Card style={styles.accountCard}>
+        <View style={styles.accountHead}>
+          <Ionicons name="phone-portrait-outline" size={22} color={colors.textMuted} />
+          <View style={{ flex: 1 }}>
+            <T v="heading">On this device only</T>
+            <T v="caption" color={colors.textFaint}>
+              Company accounts are not set up in this build.
+            </T>
+          </View>
+        </View>
+      </Card>
+    );
+  }
+
+  if (!signedIn) {
+    return (
+      <Card style={styles.accountCard}>
+        <View style={styles.accountHead}>
+          <Ionicons name="person-circle-outline" size={28} color={colors.textMuted} />
+          <View style={{ flex: 1 }}>
+            <T v="heading">{restored ? 'Not signed in' : 'Checking your account...'}</T>
+            <T v="caption" color={colors.textMuted}>
+              You are using local-only mode: projects and photos stay on this device. Sign in to share projects with your company and use company AI.
+            </T>
+          </View>
+        </View>
+        <View style={styles.chipRow}>
+          <Button title="Sign in" icon="log-in-outline" compact onPress={() => router.push('/auth/sign-in' as never)} style={{ flexGrow: 1 }} />
+          <Button title="Create account" kind="secondary" icon="person-add-outline" compact onPress={() => router.push('/auth/sign-up' as never)} style={{ flexGrow: 1 }} />
+        </View>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={styles.accountCard}>
+      <View style={styles.accountHead}>
+        <Ionicons name="person-circle" size={28} color={colors.accent} />
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <T v="heading" numberOfLines={1}>
+            {email ?? 'Signed in'}
+          </T>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' }}>
+            <T v="caption" color={colors.textMuted} numberOfLines={1}>
+              {org ? org.name : 'No company selected'}
+            </T>
+            {role ? <RoleBadge role={role} /> : null}
+          </View>
+        </View>
+      </View>
+      <View style={styles.chipRow}>
+        <Button title="Account" kind="secondary" icon="person-outline" compact onPress={() => router.push('/account' as never)} style={{ flexGrow: 1 }} />
+        <Button title={org ? 'Switch company' : 'Choose company'} kind="secondary" icon="business-outline" compact onPress={() => router.push('/org/select' as never)} style={{ flexGrow: 1 }} />
+      </View>
+    </Card>
+  );
+}
+
+function SyncSection({ wifiOnly, onWifiOnly }: { wifiOnly: boolean; onWifiOnly: (v: boolean) => void }) {
+  const backendEnabled = useAuth((s) => s.backendEnabled);
+  const signedIn = useAuth((s) => s.session != null);
+  const sync = useSyncStatus();
+  const [busy, setBusy] = useState(false);
+  if (!backendEnabled) return null;
+
+  const active = signedIn && !!sync.activeOrgId && sync.phase !== 'disabled';
+  const waiting = sync.pendingChanges + sync.pendingPhotos;
+  const status = !signedIn
+    ? 'Sign in to sync company projects.'
+    : !sync.activeOrgId
+      ? 'Choose a company to sync its projects.'
+      : sync.error
+        ? `Problem: ${sync.error}`
+        : [
+            sync.lastSyncedAt ? `Last synced ${formatDateTime(sync.lastSyncedAt)}` : 'Not synced yet',
+            waiting ? `${waiting} waiting to upload` : null,
+          ]
+            .filter(Boolean)
+            .join('. ');
+
+  return (
+    <>
+      <SectionTitle>Sync</SectionTitle>
+      <Card style={{ gap: space.md }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.md }}>
+          <Ionicons name={sync.error ? 'alert-circle-outline' : 'cloud-done-outline'} size={22} color={sync.error ? colors.danger : colors.accent} />
+          <T v="caption" color={sync.error ? colors.danger : colors.textMuted} style={{ flex: 1 }}>
+            {status}
+          </T>
+          <Button
+            title="Sync now"
+            icon="sync-outline"
+            kind="secondary"
+            compact
+            disabled={!active}
+            loading={busy}
+            onPress={() => {
+              setBusy(true);
+              syncNow()
+                .catch((err: unknown) => notify('Sync did not finish', err instanceof Error ? err.message : String(err)))
+                .finally(() => setBusy(false));
+            }}
+          />
+        </View>
+        <ToggleRow
+          label="Upload photos on Wi-Fi only"
+          hint="Field data (nodes, spans, notes) still syncs on cellular. Photos wait for Wi-Fi to save your data plan."
+          value={wifiOnly}
+          onChange={onWifiOnly}
+        />
+      </Card>
+    </>
+  );
+}
+
+function LinkRow({ icon, title, body, onPress }: { icon: React.ComponentProps<typeof Ionicons>['name']; title: string; body?: string; onPress: () => void }) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      onPress={onPress}
+      style={({ pressed }) => [styles.linkRow, pressed && { backgroundColor: colors.surfaceRaised }]}
+    >
+      <Ionicons name={icon} size={22} color={colors.accent} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <T v="heading">{title}</T>
+        {body ? (
+          <T v="caption" color={colors.textMuted}>
+            {body}
+          </T>
+        ) : null}
+      </View>
+      <Ionicons name="chevron-forward" size={20} color={colors.textFaint} />
+    </Pressable>
   );
 }
 
@@ -430,7 +648,19 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     backgroundColor: colors.surfaceAlt,
   },
-  logo: { width: 44, height: 44, borderRadius: radius.md, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
+  logo: { width: 44, height: 44, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+  accountCard: { gap: space.md, marginBottom: space.sm },
+  accountHead: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    minHeight: TOUCH,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.sm,
+    marginHorizontal: -space.sm,
+    borderRadius: radius.md,
+  },
   model: {
     flexDirection: 'row',
     gap: space.md,

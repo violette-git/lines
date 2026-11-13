@@ -20,6 +20,7 @@ export function FieldEditor({
   onChange,
   onAccept,
   required,
+  readOnly,
 }: {
   def: FieldDef;
   value: FieldValue | undefined;
@@ -27,6 +28,8 @@ export function FieldEditor({
   onChange: (v: FieldValue) => void;
   onAccept?: () => void;
   required?: boolean;
+  /** Shows the value as text (view-only roles). */
+  readOnly?: boolean;
 }) {
   const fromAi = meta?.source === 'ai';
   const missing = required && (value == null || value === '');
@@ -37,7 +40,9 @@ export function FieldEditor({
           {def.label}
           {required ? ' *' : ''}
         </T>
-        {fromAi && meta ? (
+        {fromAi && meta && readOnly ? (
+          <ConfidenceBadge confidence={meta.confidence} estimate={meta.isEstimate} />
+        ) : fromAi && meta ? (
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={`Accept AI value for ${def.label}`}
@@ -58,7 +63,7 @@ export function FieldEditor({
           <Ionicons name="checkmark-done" size={16} color={colors.success} />
         ) : null}
       </View>
-      <Control def={def} value={value} onChange={onChange} />
+      {readOnly ? <ReadOnlyValue def={def} value={value} /> : <Control def={def} value={value} onChange={onChange} />}
       {fromAi && meta?.note ? (
         <T v="caption" color={colors.textFaint}>
           AI: {meta.note}
@@ -116,6 +121,17 @@ function Control({
     default:
       return <TextControl def={def} value={value} onChange={onChange} />;
   }
+}
+
+function ReadOnlyValue({ def, value }: { def: FieldDef; value: FieldValue | undefined }) {
+  const empty = value == null || value === '';
+  const suffix = def.unit ? UNIT_SUFFIX[def.unit] : '';
+  const text = empty ? 'Not set' : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : `${String(value)}${suffix ? ` ${suffix}` : ''}`;
+  return (
+    <T color={empty ? colors.textFaint : colors.text}>
+      {text}
+    </T>
+  );
 }
 
 function toText(v: FieldValue | undefined): string {

@@ -31,7 +31,12 @@ export function formatLatLng(v: number): string {
   return Number.isFinite(v) ? v.toFixed(6) : '--';
 }
 
-export function sourceLabel(src: GeoFix['source']): string {
+/**
+ * How a position was obtained. Pass the fix itself so external receivers show their name
+ * ("Emlid Reach RS3"); a bare source string is still accepted.
+ */
+export function sourceLabel(fix: GeoFix['source'] | Pick<GeoFix, 'source' | 'receiver' | 'fixQuality'>): string {
+  const src = typeof fix === 'string' ? fix : fix.source;
   switch (src) {
     case 'gps':
       return 'GPS (single reading)';
@@ -39,8 +44,13 @@ export function sourceLabel(src: GeoFix['source']): string {
       return 'GPS (averaged)';
     case 'manual':
       return 'Placed by hand';
-    case 'external':
-      return 'Photo EXIF / external';
+    case 'external': {
+      if (typeof fix === 'string') return 'External receiver';
+      const receiver = fix.receiver?.trim();
+      if (receiver) return receiver;
+      // Receiver fixes always carry a fix quality; a photo's EXIF position does not.
+      return fix.fixQuality != null ? 'External receiver' : 'Photo location (EXIF)';
+    }
     default:
       return String(src);
   }

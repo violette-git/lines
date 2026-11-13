@@ -3,12 +3,16 @@ import { useEffect, useRef } from 'react';
 
 import type { LineMapViewProps } from '@/domain/contracts';
 
-import type { CoreEvent } from './core/mapCore';
+import type { CoreEvent, CoreView } from './core/mapCore';
+
+export type { CoreView as MapView } from './core/mapCore';
 
 /** Imperative handle exposed by both platform LineMapView components via ref. */
 export interface LineMapHandle {
   /** JPEG data URL of the current map view (basemap, lines, nodes, labels), or null if unavailable. */
   snapshot(): Promise<string | null>;
+  /** Visible bounds [west, south, east, north] and zoom, or null if the map is not ready. */
+  getView(): Promise<CoreView | null>;
 }
 
 type Callbacks = Pick<LineMapViewProps, 'onNodePress' | 'onNodeMoved' | 'onSpanPress' | 'onMapPress' | 'onMapLongPress'>;

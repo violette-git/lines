@@ -1,5 +1,6 @@
 // Pure conversions between domain objects and SQLite rows/bind parameters.
-import type { ClientTemplate, GeoFix, MapNode, PhotoRef, Project, Span } from '@/domain/types';
+import type { SyncRowMeta } from '@/domain/contracts';
+import type { ClientTemplate, GeoFix, MapNode, PhotoRef, PhotoUploadState, Project, Span } from '@/domain/types';
 
 export type BindValue = string | number | null;
 
@@ -26,12 +27,32 @@ export function upsertSql(table: string, columns: string[]): string {
   return `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${placeholders}) ON CONFLICT(id) DO UPDATE SET ${updates}`;
 }
 
+// ---------- sync bookkeeping columns (migration v3), present on every synced table ----------
+export interface SyncColumns {
+  org_id?: string | null;
+  dirty?: number | null;
+  deleted_at?: string | null;
+  server_rev?: number | null;
+  synced_at?: string | null;
+  sync_error?: string | null;
+}
+export function rowToMeta(r: SyncColumns): SyncRowMeta {
+  return {
+    orgId: r.org_id ?? null,
+    dirty: numOrNull(r.dirty) ?? 0,
+    deletedAt: r.deleted_at ?? null,
+    serverRev: numOrNull(r.server_rev),
+    syncedAt: r.synced_at ?? null,
+    syncError: r.sync_error ?? null,
+  };
+}
+
 // ---------- projects ----------
 export const PROJECT_COLUMNS = [
   'id', 'name', 'client', 'job_number', 'work_type', 'notes', 'status', 'rate_per_foot', 'rate_per_node',
   'template_id', 'walk_mode', 'created_at', 'updated_at',
 ];
-export interface ProjectRow {
+export interface ProjectRow extends SyncColumns {
   id: string; name: string; client: string; job_number: string; work_type: string; notes: string; status: string;
   rate_per_foot: number | null; rate_per_node: number | null; template_id: string | null; walk_mode: number;
   created_at: string; updated_at: string;
@@ -55,6 +76,7 @@ export function rowToProject(r: ProjectRow): Project {
     ratePerNode: numOrNull(r.rate_per_node),
     templateId: r.template_id ?? null,
     walkMode: bool(r.walk_mode),
+    ...(r.org_id ? { orgId: r.org_id } : {}),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -65,7 +87,7 @@ export const NODE_COLUMNS = [
   'id', 'project_id', 'seq', 'type', 'label', 'lat', 'lng', 'position', 'fields', 'ai_meta', 'icon_scale', 'status',
   'notes', 'possible_duplicate_of', 'created_at', 'updated_at', 'ai_report',
 ];
-export interface NodeRow {
+export interface NodeRow extends SyncColumns {
   id: string; project_id: string; seq: number; type: string; label: string; lat: number; lng: number;
   position: string; fields: string; ai_meta: string; icon_scale: number; status: string; notes: string;
   possible_duplicate_of: string | null; created_at: string; updated_at: string; ai_report?: string | null;
@@ -107,7 +129,7 @@ export const SPAN_COLUMNS = [
   'id', 'project_id', 'from_node_id', 'to_node_id', 'kind', 'slack_ft', 'sag_pct', 'length_override_ft', 'fields',
   'created_at', 'updated_at',
 ];
-export interface SpanRow {
+export interface SpanRow extends SyncColumns {
   id: string; project_id: string; from_node_id: string; to_node_id: string; kind: string; slack_ft: number;
   sag_pct: number; length_override_ft: number | null; fields: string; created_at: string; updated_at: string;
 }
@@ -137,9 +159,10 @@ export function rowToSpan(r: SpanRow): Span {
 export const PHOTO_COLUMNS = [
   'id', 'node_id', 'project_id', 'uri', 'watermarked_uri', 'width', 'height', 'taken_at', 'fix', 'is_primary',
 ];
-export interface PhotoRow {
+export interface PhotoRow extends SyncColumns {
   id: string; node_id: string; project_id: string; uri: string; watermarked_uri: string | null; width: number;
   height: number; taken_at: string; fix: string | null; is_primary: number;
+  updated_at?: string | null; storage_path?: string | null; watermarked_path?: string | null; upload_state?: string | null;
 }
 export function photoParams(p: PhotoRef): BindValue[] {
   return [
@@ -159,12 +182,16 @@ export function rowToPhoto(r: PhotoRow): PhotoRef {
     takenAt: r.taken_at,
     fix: parseJson<GeoFix | null>(r.fix, null),
     isPrimary: bool(r.is_primary),
+    ...(r.updated_at ? { updatedAt: r.updated_at } : {}),
+    ...(r.storage_path ? { storagePath: r.storage_path } : {}),
+    ...(r.watermarked_path ? { watermarkedPath: r.watermarked_path } : {}),
+    ...(r.upload_state ? { uploadState: r.upload_state as PhotoUploadState } : {}),
   };
 }
 
 // ---------- templates (stored whole as JSON, with a few columns for listing) ----------
 export const TEMPLATE_COLUMNS = ['id', 'name', 'client', 'data', 'created_at', 'updated_at'];
-export interface TemplateRow {
+export interface TemplateRow extends SyncColumns {
   id: string; name: string; client: string; data: string; created_at: string; updated_at: string;
 }
 export function templateParams(t: ClientTemplate): BindValue[] {
@@ -187,5 +214,9 @@ export function rowToTemplate(r: TemplateRow): ClientTemplate {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
-  return { ...base, ...parseJson<Partial<ClientTemplate>>(r.data, {}), id: r.id, name: r.name };
+  const t: ClientTemplate = { ...base, ...parseJson<Partial<ClientTemplate>>(r.data, {}), id: r.id, name: r.name };
+  // The org_id column is authoritative (the JSON copy may be stale).
+  delete t.orgId;
+  if (r.org_id) t.orgId = r.org_id;
+  return t;
 }

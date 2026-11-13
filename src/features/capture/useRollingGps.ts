@@ -1,18 +1,31 @@
 // Rolling GPS buffer for the capture screen. Starts the moment the screen mounts so a fully
 // averaged position is already waiting when the shutter fires (no "hold still for 4 seconds").
 //
-// - Subscribes to high-accuracy position updates (1 Hz).
+// - Subscribes to the configured position source (src/gps/positionSource.ts): phone location
+//   services at 1 Hz, or an external receiver over TCP (typically 1 to 10 Hz).
 // - Keeps fixes received in the last `windowSec` seconds.
 // - Drops samples far from the newest one (the user walked to the next pole), so the average
-//   follows the user instead of smearing along the walk.
-// - Averages with averageFixes (accuracy weighted, outlier rejected).
-// - Falls back to polling getQuickFix every 2 s if the watch cannot start.
-import * as Location from 'expo-location';
-import { useCallback, useEffect, useRef, useState } from 'react';
+//   follows the user instead of smearing along the walk. The walk distance shrinks with fix
+//   quality: 0.25 m for RTK fixed, 1 m for RTK float, 6 m for phone GPS.
+// - Averages with averageFixes (best quality class in window, accuracy weighted, outlier rejected).
+// - Falls back to polling the phone every 2 s if the watch cannot start.
+//
+// Public API is backward compatible: useRollingGps(windowSec, enabled) -> { status, fix,
+// sampleCount, getFixNow, reset } plus optional extras (source, sourceStatus, latest, receiverStatus).
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { GeoFix } from '@/domain/types';
 import { averageFixes, distanceM } from '@/geo';
-import { getQuickFix, locationToFix } from '@/geo/gpsSampler';
+import { qualityOf } from '@/geo/averaging';
+import {
+  configFromSettings,
+  EXTERNAL_FIX_MAX_AGE_MS,
+  watchPosition,
+  type PositionSourceKind,
+  type SourceStatus,
+} from '@/gps/positionSource';
+import type { ReceiverStatus } from '@/gps/tcpReceiver';
+import { useStore } from '@/state/store';
 
 export type RollingGpsStatus = 'starting' | 'live' | 'denied' | 'unavailable';
 
@@ -25,6 +38,8 @@ interface Sample {
 const WALK_RESET_MIN_M = 6;
 /** If no reading arrived for this long, the buffered fix may be from a previous pole: don't use it at shutter time. */
 const STALE_AT_SHUTTER_MS = 30000;
+/** UI state updates at most this often; the buffer itself takes every sample. */
+const UI_THROTTLE_MS = 400;
 
 export interface RollingGps {
   status: RollingGpsStatus;
@@ -36,14 +51,31 @@ export interface RollingGps {
   getFixNow(): GeoFix | null;
   /** Clears the buffer (e.g. after the user moved on). */
   reset(): void;
+  /** Where positions are coming from right now ('device' when an external receiver is unavailable here). */
+  source?: PositionSourceKind;
+  /** Finer status, including 'stale' for a receiver that stopped talking. */
+  sourceStatus?: SourceStatus;
+  /** Newest raw sample (not averaged). */
+  latest?: GeoFix | null;
+  /** Live receiver status when the source is 'external_tcp'. */
+  receiverStatus?: ReceiverStatus | null;
 }
 
-function prune(buf: Sample[], windowMs: number, now: number): Sample[] {
+/** How far (m) an older sample may be from the newest before it is treated as a previous spot. */
+export function walkResetLimitM(f: GeoFix): number {
+  const q = qualityOf(f);
+  const acc = f.accuracyM ?? 10;
+  if (q === 'rtk_fixed') return Math.max(0.25, 4 * acc);
+  if (q === 'rtk_float' || q === 'ppp') return Math.max(1, 3 * acc);
+  return Math.max(WALK_RESET_MIN_M, 2 * acc);
+}
+
+export function pruneSamples(buf: Sample[], windowMs: number, now: number): Sample[] {
   let out = buf.filter((s) => now - s.receivedAt <= windowMs);
   if (out.length === 0 && buf.length > 0) out = [buf[buf.length - 1]]; // keep newest so we never go blank
   const newest = out[out.length - 1];
   if (!newest) return out;
-  const limit = Math.max(WALK_RESET_MIN_M, 2 * (newest.fix.accuracyM ?? 10));
+  const limit = walkResetLimitM(newest.fix);
   return out.filter((s) => s === newest || distanceM(s.fix, newest.fix) <= limit);
 }
 
@@ -58,17 +90,34 @@ function average(buf: Sample[]): GeoFix | null {
 
 export function useRollingGps(windowSec: number, enabled = true): RollingGps {
   const windowMs = Math.max(2, windowSec) * 1000;
+  const gpsSource = useStore((s) => s.settings.gpsSource);
+  const receiverHost = useStore((s) => s.settings.receiverHost);
+  const receiverPort = useStore((s) => s.settings.receiverPort);
+  const antennaHeightM = useStore((s) => s.settings.antennaHeightM);
+  const cfg = useMemo(
+    () => configFromSettings({ gpsSource, receiverHost, receiverPort, antennaHeightM }),
+    [gpsSource, receiverHost, receiverPort, antennaHeightM],
+  );
+
   const buf = useRef<Sample[]>([]);
+  const kindRef = useRef<PositionSourceKind>('device');
+  const lastUi = useRef(0);
   const [status, setStatus] = useState<RollingGpsStatus>('starting');
+  const [sourceStatus, setSourceStatus] = useState<SourceStatus>('starting');
+  const [source, setSource] = useState<PositionSourceKind>('device');
   const [fix, setFix] = useState<GeoFix | null>(null);
+  const [latest, setLatest] = useState<GeoFix | null>(null);
   const [sampleCount, setSampleCount] = useState(0);
+  const [receiverStatus, setReceiverStatus] = useState<ReceiverStatus | null>(null);
 
   const push = useCallback(
     (f: GeoFix) => {
       const now = Date.now();
-      buf.current = prune([...buf.current, { fix: f, receivedAt: now }], windowMs, now);
-      const avg = average(buf.current);
-      setFix(avg);
+      buf.current = pruneSamples([...buf.current, { fix: f, receivedAt: now }], windowMs, now);
+      if (now - lastUi.current < UI_THROTTLE_MS) return;
+      lastUi.current = now;
+      setFix(average(buf.current));
+      setLatest(f);
       setSampleCount(buf.current.length);
     },
     [windowMs],
@@ -77,68 +126,71 @@ export function useRollingGps(windowSec: number, enabled = true): RollingGps {
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    let sub: Location.LocationSubscription | null = null;
-    let poll: ReturnType<typeof setInterval> | null = null;
+    let remove: (() => void) | null = null;
+    let lastRxUi = 0;
+    let lastRxState: ReceiverStatus['state'] | null = null;
+    // A new source must not average with samples from the old one.
+    buf.current = [];
+    lastUi.current = 0;
+    setFix(null);
+    setLatest(null);
+    setSampleCount(0);
+    setStatus('starting');
+    setSourceStatus('starting');
+    setReceiverStatus(null);
 
-    const startPolling = () => {
-      const tick = async () => {
-        const f = await getQuickFix();
-        if (cancelled) return;
-        if (f) {
+    watchPosition(
+      {
+        onFix: (f) => {
+          if (cancelled) return;
           push(f);
           setStatus('live');
-        }
-      };
-      void tick();
-      poll = setInterval(tick, 2000);
-    };
-
-    (async () => {
-      try {
-        let perm = await Location.getForegroundPermissionsAsync();
-        if (!perm.granted && perm.canAskAgain) perm = await Location.requestForegroundPermissionsAsync();
-        if (cancelled) return;
-        if (!perm.granted) {
-          setStatus('denied');
-          return;
-        }
-        // Seed with a recent cached fix so the chip is never blank on open.
-        const last = await Location.getLastKnownPositionAsync({ maxAge: 15000, requiredAccuracy: 30 }).catch(() => null);
-        if (cancelled) return;
-        if (last && buf.current.length === 0) push(locationToFix(last));
-        sub = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.Highest, timeInterval: 1000, distanceInterval: 0 },
-          (loc) => {
-            if (cancelled) return;
-            push(locationToFix(loc));
-            setStatus('live');
-          },
-          () => {
-            if (!cancelled && !poll) startPolling();
-          },
-        );
-        if (cancelled) sub.remove();
-      } catch {
-        if (cancelled) return;
-        startPolling();
-        setStatus((s) => (s === 'starting' ? 'unavailable' : s));
+        },
+        onStatus: (s) => {
+          if (cancelled) return;
+          setSourceStatus(s);
+          if (s === 'live') setStatus('live');
+          else if (s === 'denied') setStatus('denied');
+          else if (s === 'stale') setStatus('unavailable');
+          else if (s === 'unavailable') {
+            if (kindRef.current === 'external_tcp') setStatus('unavailable');
+            else setStatus((cur) => (cur === 'starting' ? 'unavailable' : cur));
+          } else if (s === 'starting' && kindRef.current === 'external_tcp') setStatus('starting');
+        },
+        onReceiverStatus: (st) => {
+          if (cancelled) return;
+          const now = Date.now();
+          if (st.state === lastRxState && now - lastRxUi < 1000) return;
+          lastRxState = st.state;
+          lastRxUi = now;
+          setReceiverStatus(st);
+        },
+      },
+      { precision: 'highest', cfg },
+    ).then((w) => {
+      kindRef.current = w.kind;
+      if (cancelled) w.remove();
+      else {
+        remove = () => w.remove();
+        setSource(w.kind);
       }
-    })();
+    });
 
     return () => {
       cancelled = true;
-      sub?.remove();
-      if (poll) clearInterval(poll);
+      remove?.();
     };
-  }, [enabled, push]);
+  }, [enabled, push, cfg]);
 
   const getFixNow = useCallback((): GeoFix | null => {
     const now = Date.now();
-    buf.current = prune(buf.current, windowMs, now);
-    // prune() keeps the newest sample forever so the chip never goes blank; but if updates stalled
-    // (GPS lost, watch died) that sample can be minutes old. Return null so the caller takes a fresh fix.
+    buf.current = pruneSamples(buf.current, windowMs, now);
+    // pruneSamples() keeps the newest sample forever so the chip never goes blank; but if updates
+    // stalled (GPS lost, receiver dropped) that sample can be old. Return null so the caller takes a
+    // fresh fix. A receiver streams continuously, so its limit is much tighter.
     const newest = buf.current[buf.current.length - 1];
-    if (newest && now - newest.receivedAt > Math.max(STALE_AT_SHUTTER_MS, windowMs * 3)) return null;
+    const maxAge = kindRef.current === 'external_tcp' ? EXTERNAL_FIX_MAX_AGE_MS : Math.max(STALE_AT_SHUTTER_MS, windowMs * 3);
+    if (newest && now - newest.receivedAt > maxAge) return null;
     return average(buf.current);
   }, [windowMs]);
 
@@ -148,5 +200,5 @@ export function useRollingGps(windowSec: number, enabled = true): RollingGps {
     setSampleCount(buf.current.length);
   }, []);
 
-  return { status, fix, sampleCount, getFixNow, reset };
+  return { status, fix, sampleCount, getFixNow, reset, source, sourceStatus, latest, receiverStatus };
 }

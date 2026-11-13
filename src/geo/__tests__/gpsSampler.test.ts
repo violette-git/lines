@@ -2,6 +2,7 @@
 import * as Location from 'expo-location';
 
 import { LOCATION_PERMISSION_DENIED, getQuickFix, sampleGps } from '@/geo/gpsSampler';
+import { DEFAULT_POSITION_CONFIG, setPositionSettingsProvider } from '@/gps/positionSource';
 
 jest.mock('expo-location', () => ({
   Accuracy: { Lowest: 1, Low: 2, Balanced: 3, High: 4, Highest: 5, BestForNavigation: 6 },
@@ -24,6 +25,7 @@ const denied = { granted: false, status: 'denied', canAskAgain: false, expires: 
 
 beforeEach(() => {
   jest.resetAllMocks();
+  setPositionSettingsProvider(() => DEFAULT_POSITION_CONFIG);
   L.getForegroundPermissionsAsync.mockResolvedValue(granted);
   L.requestForegroundPermissionsAsync.mockResolvedValue(granted);
 });

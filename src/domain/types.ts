@@ -156,7 +156,17 @@ export interface PhotoRef {
   takenAt: string;
   fix: GeoFix | null;
   isPrimary: boolean;
+  /** Device time of the last edit to this photo record (sync last-write-wins). Falls back to takenAt. */
+  updatedAt?: string;
+  /** Path of the original in the company 'photos' bucket once uploaded: <org>/<project>/<photo>.jpg. */
+  storagePath?: string | null;
+  /** Path of the watermarked copy in the bucket: <org>/<project>/<photo>_wm.jpg. */
+  watermarkedPath?: string | null;
+  /** Upload progress of a company photo. Managed by sync; the app never needs to set it. */
+  uploadState?: PhotoUploadState;
 }
+
+export type PhotoUploadState = 'pending' | 'uploaded' | 'failed';
 
 /** Client template: preset fields, required fields, label pattern and rates for a client. */
 export interface ClientTemplate {
@@ -176,6 +186,8 @@ export interface ClientTemplate {
   ratePerNode: number | null;
   /** Burn GPS/time watermark into photos. */
   watermarkPhotos: boolean;
+  /** Company (organization) this template belongs to. Null/undefined = local template on this device. */
+  orgId?: string | null;
   createdAt: string;
   updatedAt: string;
 }

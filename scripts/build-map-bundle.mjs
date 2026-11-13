@@ -81,7 +81,7 @@ if (/^\s*(export|import)\b/m.test(coreJs)) fail('mapCore output still has module
 coreJs =
   '(function(){\n"use strict";\n' +
   coreJs +
-  '\nwindow.LineMapCore={createLineMap:createLineMap,installInlineWorker:installInlineWorker};' +
+  '\nwindow.LineMapCore={createLineMap:createLineMap,installInlineWorker:installInlineWorker,installTileProtocol:installTileProtocol};' +
   '\nwindow.createLineMap=createLineMap;\n})();\n';
 assertInlineSafe('mapCore', coreJs, 'script');
 
@@ -135,13 +135,19 @@ function post(msg){
 window.addEventListener("error",function(ev){post({type:"error",message:String((ev&&ev.message)||"error")+(ev&&ev.lineno?" @"+ev.lineno:"")});});
 window.addEventListener("unhandledrejection",function(ev){var r=ev&&ev.reason;post({type:"error",message:"unhandled: "+String((r&&r.message)||r)});});
 var ctl=null;
+var tiles=null;
 function handle(msg){
-  if(!msg||!ctl)return;
+  if(!msg)return;
+  if(msg.type==="tiles"){if(tiles)tiles.receive(msg.items);return;}
+  if(msg.type==="tilesReset"){if(tiles)tiles.failAll();return;}
+  if(!ctl)return;
   switch(msg.type){
     case "state":ctl.setState(msg.state);break;
     case "fit":ctl.fit(msg.animate!==false);break;
     case "center":ctl.centerOn(msg.lat,msg.lng,msg.zoom);break;
     case "resize":ctl.resize();break;
+    case "reloadTiles":ctl.reloadTiles();break;
+    case "view":post({type:"view",reqId:msg.reqId,view:ctl.getView()});break;
     case "snapshot":
       ctl.snapshot().then(function(d){post({type:"snapshot",reqId:msg.reqId,data:d});},function(){post({type:"snapshot",reqId:msg.reqId,data:null});});
       break;
@@ -161,6 +167,7 @@ try{
   var w=document.getElementById("lm-worker");
   window.LineMapCore.installInlineWorker(window.maplibregl,w?w.textContent:"");
   if(w&&w.parentNode)w.parentNode.removeChild(w);
+  tiles=window.LineMapCore.installTileProtocol(window.maplibregl,"lmtile",post);
   ctl=window.LineMapCore.createLineMap(document.getElementById("map"),window.maplibregl,post,{showZoomButtons:false});
   window.__lmController=ctl;
   post({type:"ready"});

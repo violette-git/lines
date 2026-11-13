@@ -1,0 +1,51 @@
+# Store release: checks the code, then builds signed store binaries on EAS and (optionally) sends
+# them to TestFlight and the Google Play internal testing track.
+# Needs: EXPO_TOKEN repository secret, the EAS "production" environment variables, and the submit
+# placeholders in eas.json filled in. See docs/RELEASE_CHECKLIST.md.
+# Version numbers: the user-facing version comes from app.json "version". Build numbers (iOS
+# buildNumber, Android versionCode) are stored on EAS and go up by one on every production build.
+name: Store release
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "ios, android or all"
+        default: "all"
+      submit:
+        description: "Send the builds to TestFlight / Play internal testing when done (true or false)"
+        default: "true"
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx jest --ci
+      - name: Check the app config resolves
+        run: npx expo config --type public > /dev/null
+        env:
+          EXPO_OFFLINE: "1"
+  release:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+      - run: npm ci
+      - name: Build (and submit)
+        run: |
+          SUBMIT_FLAG=""
+          if [ "${{ github.event.inputs.submit }}" = "true" ]; then SUBMIT_FLAG="--auto-submit"; fi
+          eas build --platform "${{ github.event.inputs.platform }}" --profile production --non-interactive --no-wait $SUBMIT_FLAG

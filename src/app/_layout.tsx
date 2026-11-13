@@ -1,16 +1,22 @@
 // Root layout: dark theme, safe areas, data init with a branded loading view, and first-run onboarding.
 import Ionicons from '@expo/vector-icons/Ionicons';
+import { Image } from 'expo-image';
 import { DarkTheme, router, Stack, ThemeProvider, usePathname, type Theme } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { useAuthStore } from '@/backend/authStore';
+import { LOGO_TILE } from '@/components/brand';
 import { hasSeenOnboarding } from '@/components/prefs';
 import { Button, T } from '@/components/ui';
 import { DEMO_PROJECT_ID } from '@/data';
+import { AiConsentHost } from '@/features/consent/AiConsentDialog';
 import { IS_PREVIEW_BUILD } from '@/map/basemaps';
+import { startOfflineMaps } from '@/offline/manager';
 import { useStore } from '@/state/store';
+import { SyncManager } from '@/sync';
 import { colors, font, radius, space } from '@/theme';
 
 const navTheme: Theme = {
@@ -35,6 +41,14 @@ export default function RootLayout() {
     setPhase({ kind: 'loading' });
     try {
       await useStore.getState().init();
+      // Offline map areas: load the saved list and resume unfinished downloads. Never blocks start-up.
+      setTimeout(() => {
+        try {
+          startOfflineMaps();
+        } catch {
+          // Offline maps stay unavailable this session; the map still works online.
+        }
+      }, 0);
       const seen = await hasSeenOnboarding();
       // No stored flag: treat as first run only when there is no real work yet (the web preview's
       // seeded demo does not count). A failed flag read on an existing install therefore never
@@ -50,6 +64,12 @@ export default function RootLayout() {
     void boot();
   }, [boot]);
 
+  // Restore the signed-in session (if any) alongside the data load. Never blocks the app: in
+  // local-only builds, or offline, it just finishes with no session or cached companies.
+  useEffect(() => {
+    void useAuthStore.getState().restore();
+  }, []);
+
   return (
     <SafeAreaProvider>
       <ThemeProvider value={navTheme}>
@@ -60,6 +80,9 @@ export default function RootLayout() {
               <AppStack />
               <FirstRunRedirect enabled={phase.showOnboarding} />
               <PreviewNotice />
+              <AiConsentHost />
+              {/* Company sync: starts when signed in with an active company, stops on sign-out. */}
+              <SyncManager />
             </>
           ) : phase.kind === 'error' ? (
             <ErrorView message={phase.message} onRetry={boot} />
@@ -97,6 +120,25 @@ function AppStack() {
       <Stack.Screen name="templates/[id]" options={{ title: 'Template' }} />
       <Stack.Screen name="help" options={{ title: 'Help and how-to' }} />
       <Stack.Screen name="onboarding" options={{ headerShown: false, title: 'Welcome', animation: 'fade' }} />
+      <Stack.Screen name="auth/sign-in" options={{ title: 'Sign in' }} />
+      <Stack.Screen name="auth/sign-up" options={{ title: 'Create account' }} />
+      <Stack.Screen name="auth/reset" options={{ title: 'Reset password' }} />
+      <Stack.Screen name="account/index" options={{ title: 'Account' }} />
+      <Stack.Screen name="org/select" options={{ title: 'Companies' }} />
+      <Stack.Screen name="org/new" options={{ presentation: 'modal', title: 'New company' }} />
+      {/* Invite links: linemappro://org/join?token=... and https://<website>/org/join?token=... both land here. */}
+      <Stack.Screen name="org/join" options={{ title: 'Join company' }} />
+      <Stack.Screen name="gps-receiver" options={{ title: 'GPS receiver' }} />
+      <Stack.Screen name="offline-maps" options={{ title: 'Offline maps' }} />
+      {/* Public pages: reachable without signing in (also served on the website). */}
+      <Stack.Screen name="legal/index" options={{ title: 'Legal' }} />
+      <Stack.Screen name="legal/privacy" options={{ title: 'Privacy policy' }} />
+      <Stack.Screen name="legal/terms" options={{ title: 'Terms of use' }} />
+      <Stack.Screen name="legal/delete-account" options={{ title: 'Delete account' }} />
+      <Stack.Screen name="support" options={{ title: 'Support' }} />
+      {/* These draw their own headers (web dashboard frame, pricing page). */}
+      <Stack.Screen name="admin" options={{ headerShown: false, title: 'Dashboard' }} />
+      <Stack.Screen name="pricing" options={{ headerShown: false, title: 'Plans and pricing' }} />
     </Stack>
   );
 }
@@ -119,9 +161,7 @@ function FirstRunRedirect({ enabled }: { enabled: boolean }) {
 function Wordmark() {
   return (
     <View style={styles.brandRow}>
-      <View style={styles.logo}>
-        <Ionicons name="git-network" size={30} color={colors.onAccent} />
-      </View>
+      <Image source={LOGO_TILE} style={styles.logo} contentFit="contain" accessibilityLabel="LineMap Pro logo" />
       <View>
         <T v="display">
           LineMap <T v="display" color={colors.accent}>Pro</T>
@@ -173,14 +213,7 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: space.xl, gap: space.xl, backgroundColor: colors.bg },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  logo: {
-    width: 56,
-    height: 56,
-    borderRadius: radius.lg,
-    backgroundColor: colors.accent,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  logo: { width: 56, height: 56, borderRadius: radius.lg, borderWidth: 1, borderColor: colors.border },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   errorCard: {
     width: '100%',

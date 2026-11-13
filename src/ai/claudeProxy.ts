@@ -3,7 +3,8 @@
 // Wire contract (keep in sync with supabase/functions):
 //   POST <settings.proxyUrl>
 //   Authorization: Bearer <token>        (omitted when no token)
-//   Body: { nodeType, imageBase64, mediaType, fieldDefs, context, model }
+//   Body: { nodeType, imageBase64, mediaType, fieldDefs, context, model, orgId? }
+//         orgId is added only when an org provider returns one (signed-in company mode).
 //   2xx:  AiAnalysisResult JSON
 //   else: { error: string }
 import type { AiAnalysisRequest, AiClient } from '@/domain/contracts';
@@ -20,10 +21,21 @@ export function setProxyAuthTokenProvider(fn: AuthTokenProvider | null): void {
   defaultAuthTokenProvider = fn ?? (() => null);
 }
 
+/** Returns the company (organization) id to bill and check the AI request against, or null. */
+export type OrgIdProvider = (req: AiAnalysisRequest) => Promise<string | null> | string | null;
+
+let defaultOrgIdProvider: OrgIdProvider = () => null;
+
+/** Lets the app inject the active company id; the backend needs it when a user is in several companies. */
+export function setProxyOrgIdProvider(fn: OrgIdProvider | null): void {
+  defaultOrgIdProvider = fn ?? (() => null);
+}
+
 export interface ProxyClientOptions {
   url: string;
   model?: string;
   getAuthToken?: AuthTokenProvider;
+  getOrgId?: OrgIdProvider;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }
@@ -35,10 +47,11 @@ export interface ProxyRequestBody {
   fieldDefs: AiAnalysisRequest['fieldDefs'];
   context: NonNullable<AiAnalysisRequest['context']>;
   model: string;
+  orgId?: string;
 }
 
-export function buildProxyBody(req: AiAnalysisRequest, model: string): ProxyRequestBody {
-  return {
+export function buildProxyBody(req: AiAnalysisRequest, model: string, orgId?: string | null): ProxyRequestBody {
+  const body: ProxyRequestBody = {
     nodeType: req.nodeType,
     imageBase64: req.imageBase64,
     mediaType: req.mediaType,
@@ -46,6 +59,8 @@ export function buildProxyBody(req: AiAnalysisRequest, model: string): ProxyRequ
     context: req.context ?? {},
     model,
   };
+  if (orgId) body.orgId = orgId;
+  return body;
 }
 
 function proxyError(status: number, body: unknown): AiError {
@@ -68,12 +83,18 @@ export function createProxyClient(opts: ProxyClientOptions): AiClient {
   return {
     async analyze(req) {
       const token = await (opts.getAuthToken ?? defaultAuthTokenProvider)();
+      let orgId: string | null = null;
+      try {
+        orgId = await (opts.getOrgId ?? defaultOrgIdProvider)(req);
+      } catch {
+        orgId = null; // the server picks the org when the user has only one
+      }
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       if (token) headers.Authorization = `Bearer ${token}`;
       const res = await fetchWithTimeout(
         fetchImpl,
         opts.url,
-        { method: 'POST', headers, body: JSON.stringify(buildProxyBody(req, model)) },
+        { method: 'POST', headers, body: JSON.stringify(buildProxyBody(req, model, orgId)) },
         opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         'the AI proxy',
       );

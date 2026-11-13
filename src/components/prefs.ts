@@ -44,3 +44,29 @@ export async function hasSeenOnboarding(): Promise<boolean | null> {
 export function markOnboardingSeen(): Promise<void> {
   return setFlag(ONBOARDING_KEY, '1');
 }
+
+// AI photo analysis consent (App Store guideline 5.1.2(i)): the user must agree before photos are
+// sent to a third-party AI. Stored as the ISO time of agreement; null means not agreed.
+export const AI_CONSENT_KEY = 'aiConsentAt';
+
+export interface AiConsent {
+  /** ISO 8601 time the user agreed. */
+  at: string;
+}
+
+export async function getAiConsent(): Promise<AiConsent | null> {
+  const v = await getFlag(AI_CONSENT_KEY);
+  if (!v) return null;
+  return Number.isNaN(Date.parse(v)) ? null : { at: v };
+}
+
+/** Records agreement now (or clears it with null). Returns the stored record. */
+export async function setAiConsent(agreed: boolean): Promise<AiConsent | null> {
+  if (!agreed) {
+    await setFlag(AI_CONSENT_KEY, null);
+    return null;
+  }
+  const at = new Date().toISOString();
+  await setFlag(AI_CONSENT_KEY, at);
+  return { at };
+}

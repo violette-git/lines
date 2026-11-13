@@ -84,8 +84,19 @@ export type CoreEvent =
   | { type: 'openUrl'; url: string }
   | { type: 'error'; message: string };
 
+/** Visible area of the map: bounds as [west, south, east, north] plus zoom. */
+export interface CoreView {
+  bounds: [number, number, number, number];
+  zoom: number;
+  center: { lat: number; lng: number };
+}
+
 export interface LineMapController {
   setState(state: CoreState): void;
+  /** Current camera view, or null before the map has a size. */
+  getView(): CoreView | null;
+  /** Re-request basemap tiles (for example after the network came back and earlier tiles failed). */
+  reloadTiles(): void;
   /** Fit camera to all nodes (padding 60, max zoom 19). Falls back to the user location. */
   fit(animate?: boolean): void;
   centerOn(lat: number, lng: number, zoom?: number): void;
@@ -342,6 +353,154 @@ export function installInlineWorker(maplibregl: any, workerSource: string): void
   const blob = new Blob([workerSource], { type: 'text/javascript' });
   g.__lmWorkerUrl = URL.createObjectURL(blob);
   maplibregl.setWorkerUrl(g.__lmWorkerUrl);
+}
+
+// ---------------------------------------------------------------- tile protocol (native WebView)
+
+/** A tile answer from the host: base64 image bytes, or null when the tile is not available. */
+export interface TileReply {
+  id: number;
+  data: string | null;
+}
+
+/** Page to host: tiles wanted and tiles no longer wanted (map aborted the request). */
+export interface TileRequestMessage {
+  type: 'tileReq';
+  reqs: Array<{ id: number; url: string }>;
+  cancel: number[];
+}
+
+export interface TileProtocolClient {
+  /** Host answers (batched). Unknown or cancelled ids are ignored. */
+  receive(items: TileReply[]): void;
+  /** Number of requests waiting for an answer. */
+  pending(): number;
+  /** Fail every waiting request (the host was reset). */
+  failAll(): void;
+}
+
+export interface TileProtocolOptions {
+  /** A request with no answer after this long fails (default 45 s). */
+  timeoutMs?: number;
+}
+
+/** Decodes standard base64 into an ArrayBuffer. */
+export function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+/**
+ * Registers maplibre custom protocol `scheme` ("lmtile") so raster tiles are requested from the host
+ * app instead of the network. Requests are batched into one message per task; aborted requests are
+ * reported so the host can drop queued work.
+ */
+export function installTileProtocol(
+  maplibregl: any,
+  scheme: string,
+  post: (msg: TileRequestMessage) => void,
+  opts?: TileProtocolOptions,
+): TileProtocolClient {
+  const timeoutMs = (opts && opts.timeoutMs) || 45000;
+  let seq = 0;
+  let outReqs: Array<{ id: number; url: string }> = [];
+  let outCancel: number[] = [];
+  let flushScheduled = false;
+  const waiting = new Map<
+    number,
+    { resolve: (v: { data: ArrayBuffer }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+
+  function flush() {
+    flushScheduled = false;
+    if (!outReqs.length && !outCancel.length) return;
+    const msg: TileRequestMessage = { type: 'tileReq', reqs: outReqs, cancel: outCancel };
+    outReqs = [];
+    outCancel = [];
+    post(msg);
+  }
+
+  function schedule() {
+    if (flushScheduled) return;
+    flushScheduled = true;
+    setTimeout(flush, 0);
+  }
+
+  function settle(id: number): { resolve: (v: { data: ArrayBuffer }) => void; reject: (e: Error) => void } | null {
+    const w = waiting.get(id);
+    if (!w) return null;
+    waiting.delete(id);
+    clearTimeout(w.timer);
+    return w;
+  }
+
+  maplibregl.addProtocol(scheme, (params: { url: string }, abortController: AbortController) => {
+    return new Promise<{ data: ArrayBuffer }>((resolve, reject) => {
+      const id = ++seq;
+      const timer = setTimeout(() => {
+        const w = settle(id);
+        if (w) {
+          outCancel.push(id);
+          schedule();
+          w.reject(new Error('tile timeout'));
+        }
+      }, timeoutMs);
+      waiting.set(id, { resolve, reject, timer });
+      const signal = abortController && abortController.signal;
+      if (signal) {
+        if (signal.aborted) {
+          settle(id);
+          reject(new Error('aborted'));
+          return;
+        }
+        signal.addEventListener('abort', () => {
+          const w = settle(id);
+          if (!w) return;
+          const queued = outReqs.findIndex((r) => r.id === id);
+          if (queued >= 0) outReqs.splice(queued, 1);
+          else {
+            outCancel.push(id);
+            schedule();
+          }
+          w.reject(new Error('aborted'));
+        });
+      }
+      outReqs.push({ id, url: params.url });
+      schedule();
+    });
+  });
+
+  return {
+    receive(items: TileReply[]) {
+      if (!items || !items.length) return;
+      for (const it of items) {
+        const w = settle(it.id);
+        if (!w) continue;
+        if (typeof it.data === 'string' && it.data.length > 0) {
+          try {
+            w.resolve({ data: base64ToArrayBuffer(it.data) });
+          } catch {
+            w.reject(new Error('bad tile data'));
+          }
+        } else {
+          w.reject(new Error('tile unavailable'));
+        }
+      }
+    },
+    pending() {
+      return waiting.size;
+    },
+    failAll() {
+      const ids = Array.from(waiting.keys());
+      for (const id of ids) {
+        const w = settle(id);
+        if (w) w.reject(new Error('tile host reset'));
+      }
+    },
+  };
 }
 
 // ---------------------------------------------------------------- engine
@@ -1141,6 +1300,28 @@ export function createLineMap(
       centerOn(lat, lng, zoom, true);
     },
     snapshot,
+    getView() {
+      if (destroyed) return null;
+      try {
+        const b = map.getBounds();
+        const c = map.getCenter();
+        const w = Math.max(-180, b.getWest());
+        const e = Math.min(180, b.getEast());
+        const s = Math.max(-85.0511287798, b.getSouth());
+        const n = Math.min(85.0511287798, b.getNorth());
+        if (![w, s, e, n].every(Number.isFinite) || !(w < e) || !(s < n)) return null;
+        return { bounds: [w, s, e, n], zoom: map.getZoom(), center: { lat: c.lat, lng: c.lng } };
+      } catch {
+        return null;
+      }
+    },
+    reloadTiles() {
+      if (destroyed || !loaded) return;
+      for (const id of basemapSourceIds) {
+        const src = map.getSource(id);
+        if (src && typeof src.setTiles === 'function' && Array.isArray(src.tiles)) src.setTiles(src.tiles.slice());
+      }
+    },
     resize() {
       if (!destroyed) map.resize();
     },

@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useCanEdit } from '@/backend/authStore';
 import { Button, Card, T } from '@/components/ui';
 import { NODE_TYPE_META } from '@/domain/nodeSchemas';
 import type { GeoFix, MapNode, NodeType } from '@/domain/types';
@@ -33,6 +34,8 @@ import { useToast } from '@/features/common/Toast';
 import { changeTypePatch } from '@/features/node-editor/changeType';
 import { WatermarkQueue } from '@/features/watermark/WatermarkQueue';
 import { getQuickFix } from '@/geo/gpsSampler';
+import { FixQualityChip } from '@/gps/FixQualityChip';
+import { useFixGate } from '@/gps/useFixGate';
 import { useStore } from '@/state/store';
 import { colors, radius, space } from '@/theme';
 
@@ -70,7 +73,13 @@ export default function CaptureScreen() {
     })().catch(() => {});
   }, [id]);
 
-  const gps = useRollingGps(settings.gpsAverageSeconds || 4);
+  // Viewers cannot capture; local projects (no orgId) always can.
+  const canEdit = useCanEdit(project ? project.orgId ?? null : null);
+
+  const gps = useRollingGps(settings.gpsAverageSeconds || 4, canEdit);
+  // "Require RTK fixed" (GPS receiver settings): warn before saving a lower-grade point.
+  const gate = useFixGate(gps.fix, gps.sourceStatus);
+  const allowOnce = useRef(false);
 
   // Type: remembers the last captured type in this project (derived from the newest node).
   const lastType = useMemo<NodeType | null>(() => {
@@ -104,12 +113,12 @@ export default function CaptureScreen() {
   // (Android) produces a new permission object, re-runs this effect and re-prompts in a loop.
   const autoAsked = useRef(false);
   useEffect(() => {
-    if (autoAsked.current) return;
+    if (autoAsked.current || !canEdit) return;
     if (support === 'yes' && permission && !permission.granted && permission.canAskAgain) {
       autoAsked.current = true;
       void requestPermission();
     }
-  }, [support, permission, requestPermission]);
+  }, [support, permission, requestPermission, canEdit]);
 
   // Capture state.
   const [busy, setBusy] = useState(false);
@@ -156,9 +165,31 @@ export default function CaptureScreen() {
     }
   };
 
+  /**
+   * Fix gate: when RTK fixed is required and the fix is not, warn instead of saving. "Shoot anyway"
+   * lets the next attempt through once. Returns true when the capture should stop here.
+   */
+  const blockedByFixGate = (retry: () => void): boolean => {
+    if (!gate.ok && !allowOnce.current) {
+      warningHaptic();
+      toast.show(gate.reason ?? 'Waiting for RTK FIX.', {
+        kind: 'warning',
+        actionLabel: 'Shoot anyway',
+        onAction: () => {
+          allowOnce.current = true;
+          retry();
+        },
+      });
+      return true;
+    }
+    allowOnce.current = false;
+    return false;
+  };
+
   const shutter = async () => {
     if (busyRef.current) return;
     if (!project) return;
+    if (blockedByFixGate(() => void shutter())) return;
     busyRef.current = true;
     setBusy(true);
     captureHaptic();
@@ -234,6 +265,7 @@ export default function CaptureScreen() {
 
   const captureWithoutPhoto = async () => {
     if (busyRef.current || !project) return;
+    if (blockedByFixGate(() => void captureWithoutPhoto())) return;
     busyRef.current = true;
     setBusy(true);
     const t0 = Date.now();
@@ -291,6 +323,25 @@ export default function CaptureScreen() {
 
   const units = settings.units;
   const cameraUsable = support === 'yes' && permission?.granted;
+  const showFixQuality = gps.source === 'external_tcp' || (gps.fix?.fixQuality != null && gps.fix.fixQuality !== 'gps');
+
+  if (project && !canEdit) {
+    return (
+      <View style={[styles.root, { backgroundColor: colors.bg }]}>
+        <Stack.Screen options={{ headerShown: false, presentation: 'fullScreenModal', animation: 'fade' }} />
+        <View style={[styles.noCam, { paddingTop: insets.top + 120 }]}>
+          <Card style={{ gap: space.md, maxWidth: 480, width: '100%' }}>
+            <Ionicons name="eye-outline" size={36} color={colors.textMuted} />
+            <T v="title">View only</T>
+            <T color={colors.textMuted}>
+              Your role in this company can look at {project.name} but not add nodes. Ask a manager or admin to change your role if you need to capture.
+            </T>
+            <Button title="Back to map" icon="map-outline" onPress={close} />
+          </Card>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.root}>
@@ -326,7 +377,11 @@ export default function CaptureScreen() {
       <View style={[styles.top, { paddingTop: insets.top + space.sm }]} pointerEvents="box-none">
         <View style={styles.topRow}>
           <RoundBtn icon="close" label="Close camera" onPress={close} />
-          <GpsChip status={gps.status} accuracyM={gps.fix?.accuracyM} samples={gps.sampleCount} units={units} />
+          {showFixQuality ? (
+            <FixQualityChip fix={gps.fix} units={units} sourceStatus={gps.sourceStatus} />
+          ) : (
+            <GpsChip status={gps.status} accuracyM={gps.fix?.accuracyM} samples={gps.sampleCount} units={units} />
+          )}
           <View style={{ flex: 1 }} />
           {cameraUsable ? (
             <RoundBtn

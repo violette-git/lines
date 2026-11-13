@@ -19,6 +19,7 @@ import { useToast } from '@/features/common/Toast';
 import { exportProject } from '@/export';
 import { formatLength } from '@/geo';
 import { computeTally, selectSpansWithLength, useStore } from '@/state/store';
+import { resolvePhotoUri } from '@/sync';
 import { colors, radius, space } from '@/theme';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
@@ -33,20 +34,26 @@ const FORMATS: { format: ExportFormat; title: string; desc: string; icon: IconNa
   { format: 'shapefile', title: 'Shapefile (GIS)', desc: 'Zipped SHP layers for ArcGIS and QGIS.', icon: 'layers-outline' },
 ];
 
+/**
+ * Photo bytes for the export. Company photos taken on another phone have no local file yet:
+ * resolvePhotoUri downloads them (native) or returns a signed link (web) first.
+ */
 async function loadPhotoBase64(photo: PhotoRef): Promise<string | null> {
   const store = getPhotoStore();
-  if (photo.watermarkedUri) {
+  const read = async (watermarked: boolean): Promise<string | null> => {
     try {
-      return await store.readBase64(photo.watermarkedUri);
+      const uri = await resolvePhotoUri(photo, { watermarked });
+      return uri ? await store.readBase64(uri) : null;
     } catch {
-      // fall through to the original
+      return null;
     }
+  };
+  if (photo.watermarkedUri || photo.watermarkedPath) {
+    const stamped = await read(true);
+    if (stamped) return stamped;
+    // fall through to the original
   }
-  try {
-    return await store.readBase64(photo.uri);
-  } catch {
-    return null;
-  }
+  return read(false);
 }
 
 export default function ExportScreen() {

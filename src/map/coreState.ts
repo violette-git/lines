@@ -5,7 +5,7 @@ import type { LineMapViewProps } from '@/domain/contracts';
 import { NODE_TYPE_META } from '@/domain/nodeSchemas';
 import type { MapNode, SpanWithLength } from '@/domain/types';
 
-import { getBasemap } from './basemaps';
+import { getBasemap, type BasemapOptions } from './basemaps';
 import type { CoreNode, CoreSpan, CoreState } from './core/mapCore';
 
 export type CoreStateInput = Pick<
@@ -52,13 +52,13 @@ export function toCoreSpan(s: SpanWithLength): CoreSpan {
   };
 }
 
-export function buildCoreState(p: CoreStateInput): CoreState {
+export function buildCoreState(p: CoreStateInput, tiles?: BasemapOptions): CoreState {
   return {
     nodes: p.nodes.map(toCoreNode),
     spans: p.spans.map(toCoreSpan),
     selectedNodeId: p.selectedNodeId,
     selectedSpanId: p.selectedSpanId,
-    basemap: getBasemap(p.basemap),
+    basemap: getBasemap(p.basemap, tiles),
     globalIconScale: p.globalIconScale,
     editMode: p.editMode,
     units: p.units,
@@ -70,7 +70,7 @@ export function buildCoreState(p: CoreStateInput): CoreState {
 }
 
 /** Memoized CoreState; recomputed only when a rendering-relevant prop changes identity. */
-export function useCoreState(p: CoreStateInput): CoreState {
+export function useCoreState(p: CoreStateInput, tiles?: BasemapOptions): CoreState {
   const {
     nodes,
     spans,
@@ -83,6 +83,9 @@ export function useCoreState(p: CoreStateInput): CoreState {
     userLocation,
     showAccuracy,
   } = p;
+  const providerId = tiles?.providerId ?? null;
+  const apiKey = tiles?.apiKey ?? null;
+  const useTileProtocol = !!tiles?.useTileProtocol;
   return useMemo(
     () =>
       buildCoreState({
@@ -96,7 +99,21 @@ export function useCoreState(p: CoreStateInput): CoreState {
         units,
         userLocation,
         showAccuracy,
-      }),
-    [nodes, spans, selectedNodeId, selectedSpanId, basemap, globalIconScale, editMode, units, userLocation, showAccuracy],
+      }, { providerId, apiKey, useTileProtocol }),
+    [
+      nodes,
+      spans,
+      selectedNodeId,
+      selectedSpanId,
+      basemap,
+      globalIconScale,
+      editMode,
+      units,
+      userLocation,
+      showAccuracy,
+      providerId,
+      apiKey,
+      useTileProtocol,
+    ],
   );
 }

@@ -8,3 +8,10 @@ web-build/
 ios/
 android/
 dist-preview/
+
+# Store credentials (never commit)
+secrets/
+*.p8
+*.jks
+*.keystore
+!debug.keystore

@@ -6,13 +6,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { canManageProjects, useAuth, useCanEdit, useCanManageProjects } from '@/backend/authStore';
 import { IconButton, Segmented, T } from '@/components/ui';
 import type { MapEditMode } from '@/domain/contracts';
 import type { GeoFix, LatLng, MapNode, NodeType, SpanKind } from '@/domain/types';
-import { errorMessage } from '@/features/common/confirm';
+import { confirmAsync, errorMessage } from '@/features/common/confirm';
 import { captureHaptic, successHaptic, tapHaptic } from '@/features/common/haptics';
 import { useMapUiBus } from '@/features/common/mapUiBus';
 import { useToast } from '@/features/common/Toast';
+import { ensureAiConsent } from '@/features/consent/AiConsentDialog';
 import { friendlyAiError } from '@/features/map-screen/aiStatus';
 import { NodeSheet } from '@/features/map-screen/NodeSheet';
 import {
@@ -30,8 +32,11 @@ import type { SheetSnap } from '@/features/sheets/BottomSheet';
 import { WatermarkQueue } from '@/features/watermark/WatermarkQueue';
 import { degreeDelta, distanceM, formatLength, metersToFeet } from '@/geo';
 import { getQuickFix, watchQuickFix } from '@/geo/gpsSampler';
+import { FixQualityChip } from '@/gps/FixQualityChip';
 import { LineMapView, type LineMapHandle } from '@/map';
+import { offlineMapsMenuItem } from '@/offline/DownloadAreaButton';
 import { computeTally, selectSpansWithLength, useStore } from '@/state/store';
+import { SyncChip } from '@/sync';
 import { colors, radius, shadow, space } from '@/theme';
 
 type Selection = { kind: 'node'; id: string } | { kind: 'span'; id: string } | null;
@@ -84,6 +89,13 @@ export default function ProjectMapScreen() {
   const nodesById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
   const tally = useMemo(() => computeTally(nodes, spans, project), [nodes, spans, project]);
   const template = project?.templateId ? templates.find((t) => t.id === project.templateId) ?? null : null;
+  // Roles: a project with no orgId lives only on this phone and is always editable.
+  const orgId = project?.orgId ?? null;
+  const canEdit = useCanEdit(orgId);
+  const canManage = useCanManageProjects(orgId);
+  // "Move to company": local project, signed in with an active company, manager or above there.
+  const activeOrg = useAuth((s) => (s.session && s.activeOrgId ? s.orgs.find((o) => o.id === s.activeOrgId) ?? null : null));
+  const canMoveToCompany = !!project && !project.orgId && !!activeOrg && canManageProjects(activeOrg.role);
 
   const [loading, setLoading] = useState(!isActive);
   useEffect(() => {
@@ -178,9 +190,19 @@ export default function ProjectMapScreen() {
     }
   };
 
+  // Viewers only look: drop back to Select if the role changes while editing.
+  useEffect(() => {
+    if (canEdit) return;
+    setMode('select');
+    setConnect(EMPTY_CONNECT);
+    setAlignActive(false);
+    setAlignPending(null);
+    setDropAt(null);
+  }, [canEdit]);
+
   // Map callbacks read the latest state through a ref (the map may keep the first callbacks).
-  const live = useRef({ mode, connect, alignActive, nodesById, template });
-  live.current = { mode, connect, alignActive, nodesById, template };
+  const live = useRef({ mode, connect, alignActive, nodesById, template, canEdit });
+  live.current = { mode, connect, alignActive, nodesById, template, canEdit };
 
   const onNodePress = useCallback((nodeId: string) => {
     const s = live.current;
@@ -215,7 +237,7 @@ export default function ProjectMapScreen() {
   }, []);
 
   const onMapLongPress = useCallback((at: LatLng) => {
-    if (live.current.mode === 'connect') return;
+    if (live.current.mode === 'connect' || !live.current.canEdit) return;
     captureHaptic();
     setDropAt(at);
   }, []);
@@ -224,7 +246,7 @@ export default function ProjectMapScreen() {
     (nodeId: string, to: LatLng) => {
       const s = live.current;
       const n = s.nodesById.get(nodeId);
-      if (!n) return;
+      if (!n || !s.canEdit) return;
       if (s.alignActive) {
         setAlignPending({ nodeId, from: { lat: n.position.lat, lng: n.position.lng }, to });
         return;
@@ -316,25 +338,58 @@ export default function ProjectMapScreen() {
   const pendingAi = tally.aiPending;
   const failedIds = Object.keys(aiErrors).filter((k) => nodesById.get(k)?.status === 'ai_failed');
 
+  const editItems: MenuItem[] = canManage
+    ? [{ icon: 'create-outline', label: 'Edit project', hint: 'Name, client, job #, rates, template', onPress: () => router.push(`/project/${id}/edit` as never) }]
+    : [];
+  const fieldItems: MenuItem[] = canEdit
+    ? [
+        { icon: 'move-outline', label: 'Align all to imagery', hint: 'Drag one node onto the photo, shift the rest', onPress: startAlign },
+        {
+          icon: 'sparkles-outline',
+          label: pendingAi + failedIds.length > 0 ? `Run pending AI (${pendingAi + failedIds.length})` : 'Run pending AI',
+          hint: settings.aiMode === 'off' ? 'AI is off in Settings' : 'Fill fields from photos for unfinished nodes',
+          onPress: () => {
+            if (settings.aiMode === 'off') {
+              toast.show('AI is turned off. Turn it on in Settings first.', { kind: 'info' });
+              return;
+            }
+            void (async () => {
+              if (!(await ensureAiConsent())) return;
+              toast.show('Running AI on pending nodes...', { kind: 'info' });
+              void runPendingAi();
+            })();
+          },
+        },
+      ]
+    : [];
+  const moveToCompany = async () => {
+    if (!project || !activeOrg) return;
+    const ok = await confirmAsync(
+      `Move to ${activeOrg.name}?`,
+      `"${project.name}" will be shared with your company. Teammates in ${activeOrg.name} will see it and, depending on their role, can edit it. Its nodes, spans and photos upload when you have signal. This cannot be undone from the phone.`,
+      { confirmText: 'Move to company' },
+    );
+    if (!ok) return;
+    try {
+      await useStore.getState().moveProjectToActiveOrg(project.id);
+      successHaptic();
+      toast.show(`Moved to ${activeOrg.name}. It will sync shortly.`, { kind: 'success' });
+    } catch (e) {
+      toast.show(`Could not move the project: ${errorMessage(e)}`, { kind: 'error' });
+    }
+  };
+  const companyItems: MenuItem[] = canMoveToCompany
+    ? [{ icon: 'business-outline', label: 'Move to company', hint: `Share this project with ${activeOrg?.name ?? 'your company'}`, onPress: () => void moveToCompany() }]
+    : [];
   const menuItems: MenuItem[] = [
-    { icon: 'create-outline', label: 'Edit project', hint: 'Name, client, job #, rates, template', onPress: () => router.push(`/project/${id}/edit` as never) },
-    { icon: 'move-outline', label: 'Align all to imagery', hint: 'Drag one node onto the photo, shift the rest', onPress: startAlign },
-    {
-      icon: 'sparkles-outline',
-      label: pendingAi + failedIds.length > 0 ? `Run pending AI (${pendingAi + failedIds.length})` : 'Run pending AI',
-      hint: settings.aiMode === 'off' ? 'AI is off in Settings' : 'Fill fields from photos for unfinished nodes',
-      onPress: () => {
-        if (settings.aiMode === 'off') {
-          toast.show('AI is turned off. Turn it on in Settings first.', { kind: 'info' });
-          return;
-        }
-        toast.show('Running AI on pending nodes...', { kind: 'info' });
-        void runPendingAi();
-      },
-    },
+    ...editItems,
+    ...companyItems,
+    ...fieldItems,
     { icon: 'radio-button-on-outline', label: 'Accuracy circles', active: showAccuracy, onPress: () => setShowAccuracy((v) => !v) },
+    ...(id ? [offlineMapsMenuItem(id, mapRef)] : []),
     { icon: 'share-outline', label: 'Export', onPress: openExport },
   ];
+  const showFixChip = settings.gpsSource === 'external_tcp' || (userLocation?.fixQuality != null && userLocation.fixQuality !== 'gps');
 
   const selectedNode = selection?.kind === 'node' ? nodesById.get(selection.id) ?? null : null;
   const selectedSpan = selection?.kind === 'span' ? spans.find((s) => s.id === selection.id) ?? null : null;
@@ -384,8 +439,9 @@ export default function ProjectMapScreen() {
             style={styles.glass}
           />
           <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Edit project details"
+            accessibilityRole={canManage ? 'button' : 'header'}
+            accessibilityLabel={canManage ? 'Edit project details' : project?.name ?? 'Project'}
+            disabled={!canManage}
             onPress={() => router.push(`/project/${id}/edit` as never)}
             style={[styles.titleBox, styles.glass]}
           >
@@ -393,9 +449,11 @@ export default function ProjectMapScreen() {
               {project?.name ?? 'Project'}
             </T>
             <T v="caption" color={colors.textMuted} numberOfLines={1}>
-              {[project?.client, project?.jobNumber ? `Job ${project.jobNumber}` : ''].filter(Boolean).join('  |  ') || 'Tap to add client and job #'}
+              {[project?.client, project?.jobNumber ? `Job ${project.jobNumber}` : ''].filter(Boolean).join('  |  ') ||
+                (canManage ? 'Tap to add client and job #' : 'No client or job # yet')}
             </T>
           </Pressable>
+          {project?.orgId ? <SyncChip compact /> : null}
           <IconButton icon="share-outline" label="Export" size={48} onPress={openExport} style={styles.glass} />
           <IconButton icon="ellipsis-vertical" label="More" size={48} onPress={() => setMenuOpen(true)} style={styles.glass} />
         </View>
@@ -408,8 +466,9 @@ export default function ProjectMapScreen() {
           {project ? (
             <Pressable
               accessibilityRole="switch"
-              accessibilityState={{ checked: project.walkMode }}
+              accessibilityState={{ checked: project.walkMode, disabled: !canEdit }}
               accessibilityLabel="Walk mode"
+              disabled={!canEdit}
               onPress={() => {
                 tapHaptic();
                 void updateProject(project.id, { walkMode: !project.walkMode });
@@ -422,16 +481,29 @@ export default function ProjectMapScreen() {
               </T>
             </Pressable>
           ) : null}
+          {showFixChip ? <FixQualityChip fix={userLocation} units={units} compact /> : null}
+          {!canEdit && project ? (
+            <View style={[styles.banner, { borderColor: colors.borderStrong }]} accessibilityLabel="View only. Your role in this company can look but not change this project.">
+              <Ionicons name="eye-outline" size={16} color={colors.textMuted} />
+              <T v="label" color={colors.textMuted}>
+                View only
+              </T>
+            </View>
+          ) : null}
           {pendingAi > 0 ? (
             <View style={[styles.banner, { borderColor: colors.info }]}>
               <ActivityIndicator size="small" color={colors.info} />
               <T v="label">AI reading {pendingAi} photo{pendingAi === 1 ? '' : 's'}</T>
             </View>
           ) : null}
-          {failedIds.length > 0 ? (
+          {failedIds.length > 0 && canEdit ? (
             <Pressable
               accessibilityRole="button"
-              onPress={() => void runPendingAi()}
+              onPress={() => {
+                void (async () => {
+                  if (await ensureAiConsent()) void runPendingAi();
+                })();
+              }}
               style={[styles.banner, { borderColor: colors.warning }]}
             >
               <Ionicons name="cloud-offline-outline" size={16} color={colors.warning} />
@@ -535,33 +607,42 @@ export default function ProjectMapScreen() {
             </View>
           ) : null}
 
-          <View style={styles.controls}>
-            <View style={[styles.segWrap, styles.glass]}>
-              <Segmented<MapEditMode>
-                value={mode}
-                onChange={setEditMode}
-                options={[
-                  { value: 'select', label: 'Select', icon: 'hand-left-outline' },
-                  { value: 'move', label: 'Move', icon: 'move-outline' },
-                  { value: 'connect', label: 'Connect', icon: 'git-commit-outline' },
-                ]}
-              />
-              <T v="caption" color={colors.textFaint} style={{ textAlign: 'center', marginTop: 4 }}>
-                Long-press the map to drop a pin
+          {canEdit ? (
+            <View style={styles.controls}>
+              <View style={[styles.segWrap, styles.glass]}>
+                <Segmented<MapEditMode>
+                  value={mode}
+                  onChange={setEditMode}
+                  options={[
+                    { value: 'select', label: 'Select', icon: 'hand-left-outline' },
+                    { value: 'move', label: 'Move', icon: 'move-outline' },
+                    { value: 'connect', label: 'Connect', icon: 'git-commit-outline' },
+                  ]}
+                />
+                <T v="caption" color={colors.textFaint} style={{ textAlign: 'center', marginTop: 4 }}>
+                  Long-press the map to drop a pin
+                </T>
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Capture: take photo and add node"
+                onPress={() => {
+                  captureHaptic();
+                  router.push(`/project/${id}/capture` as never);
+                }}
+                style={({ pressed }) => [styles.capture, { transform: [{ scale: pressed ? 0.94 : 1 }] }]}
+              >
+                <Ionicons name="camera" size={40} color={colors.onAccent} />
+              </Pressable>
+            </View>
+          ) : (
+            <View style={[styles.hint, styles.glass]}>
+              <Ionicons name="eye-outline" size={16} color={colors.textMuted} />
+              <T v="label" color={colors.textMuted}>
+                View only: tap a node or span to see its details
               </T>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="Capture: take photo and add node"
-              onPress={() => {
-                captureHaptic();
-                router.push(`/project/${id}/capture` as never);
-              }}
-              style={({ pressed }) => [styles.capture, { transform: [{ scale: pressed ? 0.94 : 1 }] }]}
-            >
-              <Ionicons name="camera" size={40} color={colors.onAccent} />
-            </Pressable>
-          </View>
+          )}
         </View>
       ) : null}
 
@@ -573,6 +654,7 @@ export default function ProjectMapScreen() {
         units={units}
         snap={snap}
         onSnapChange={setSnap}
+        readOnly={!canEdit}
         onClose={() => setSelection(null)}
         onEdit={(nodeId) => router.push(`/project/${id}/node/${nodeId}` as never)}
         onConnectFrom={(nodeId) => {
@@ -586,6 +668,7 @@ export default function ProjectMapScreen() {
       />
       <SpanSheet
         span={selectedSpan}
+        readOnly={!canEdit}
         nodesById={nodesById}
         units={units}
         snap={snap}

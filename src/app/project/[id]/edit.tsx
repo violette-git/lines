@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useCanManageProjects } from '@/backend/authStore';
+import { formatMoney } from '@/components/format';
 import { Button, Card, Chip, Field, Segmented, SectionTitle, T, ToggleRow } from '@/components/ui';
 import type { Project, WorkType } from '@/domain/types';
 import { errorMessage } from '@/features/common/confirm';
@@ -57,6 +59,8 @@ export default function EditProjectScreen() {
 
   const [draft, setDraft] = useState<Draft | null>(project ? toDraft(project) : null);
   const [saving, setSaving] = useState(false);
+  // Renaming, rates, status: manager and up for company projects; local projects always.
+  const canManage = useCanManageProjects(project ? project.orgId ?? null : null);
 
   useEffect(() => {
     if (!ready) void useStore.getState().init();
@@ -75,6 +79,40 @@ export default function EditProjectScreen() {
         <View style={styles.center}>
           {ready ? <T color={colors.textMuted}>Project not found.</T> : <ActivityIndicator color={colors.accent} />}
         </View>
+      </View>
+    );
+  }
+
+  if (!canManage) {
+    const tpl = project.templateId ? templates.find((t) => t.id === project.templateId) : null;
+    const rates = [
+      project.ratePerFoot != null ? `${formatMoney(project.ratePerFoot)}/ft` : null,
+      project.ratePerNode != null ? `${formatMoney(project.ratePerNode)}/node` : null,
+    ]
+      .filter(Boolean)
+      .join(' + ');
+    return (
+      <View style={styles.root}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <ScreenHeader title="Project details" subtitle={project.name} onBack={back} />
+        <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 40, gap: space.md }]}>
+          <Card style={{ flexDirection: 'row', gap: space.sm, alignItems: 'center' }}>
+            <T v="caption" color={colors.textMuted} style={{ flex: 1 }}>
+              View only. Only a manager, admin or owner in this company can change project details.
+            </T>
+          </Card>
+          <Card style={{ gap: space.md }}>
+            <ReadRow k="Project name" v={project.name} />
+            <ReadRow k="Client" v={project.client} />
+            <ReadRow k="Job #" v={project.jobNumber} />
+            <ReadRow k="Work type" v={WORK_TYPE_LABEL[project.workType]} />
+            <ReadRow k="Client template" v={tpl?.name ?? (project.templateId ? 'Not available' : 'None')} />
+            <ReadRow k="Pay rates" v={rates} />
+            <ReadRow k="Walk mode" v={project.walkMode ? 'On' : 'Off'} />
+            <ReadRow k="Status" v={STATUS_LABEL[project.status]} />
+            <ReadRow k="Notes" v={project.notes} />
+          </Card>
+        </ScrollView>
       </View>
     );
   }
@@ -216,6 +254,20 @@ export default function EditProjectScreen() {
         <Button title="Save" icon="checkmark" onPress={save} loading={saving} disabled={!valid} style={{ flex: 2 }} />
       </View>
       {toast.node}
+    </View>
+  );
+}
+
+const WORK_TYPE_LABEL: Record<WorkType, string> = { aerial: 'Aerial', underground: 'Underground', mixed: 'Mixed', qc: 'QC' };
+const STATUS_LABEL: Record<Project['status'], string> = { active: 'Active', complete: 'Complete', archived: 'Archived' };
+
+function ReadRow({ k, v }: { k: string; v: string }) {
+  return (
+    <View style={{ gap: 2 }}>
+      <T v="caption" color={colors.textMuted}>
+        {k}
+      </T>
+      <T color={v ? colors.text : colors.textFaint}>{v || 'Not set'}</T>
     </View>
   );
 }

@@ -4,6 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import type { LineMapViewProps } from '@/domain/contracts';
+import { useTileSettings } from '@/offline/tileSettings';
 
 import { createLineMap, installInlineWorker, type LineMapController } from './core/mapCore';
 import { useCoreState } from './coreState';
@@ -31,7 +32,9 @@ export const LineMapView = forwardRef<LineMapHandle, LineMapViewProps>(function 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const ctlRef = useRef<LineMapController | null>(null);
   const propsRef = useLatest(props);
-  const coreState = useCoreState(props);
+  // Web keeps plain tile URLs (no device cache), but follows the same map source setting.
+  const tileSettings = useTileSettings();
+  const coreState = useCoreState(props, { ...tileSettings, useTileProtocol: false });
   const stateRef = useLatest(coreState);
 
   useEffect(() => {
@@ -70,6 +73,7 @@ export const LineMapView = forwardRef<LineMapHandle, LineMapViewProps>(function 
     ref,
     () => ({
       snapshot: () => (ctlRef.current ? ctlRef.current.snapshot() : Promise.resolve(null)),
+      getView: () => Promise.resolve(ctlRef.current ? ctlRef.current.getView() : null),
     }),
     [],
   );

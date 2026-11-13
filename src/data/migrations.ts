@@ -8,6 +8,9 @@ export interface Migration {
   statements: string[];
 }
 
+/** Local tables that carry sync bookkeeping columns (from migration 3). */
+export const SYNCED_TABLES = ['projects', 'nodes', 'spans', 'photos', 'templates'] as const;
+
 export const MIGRATIONS: Migration[] = [
   {
     version: 1,
@@ -95,6 +98,32 @@ export const MIGRATIONS: Migration[] = [
     version: 2,
     description: 'Store the last AI analysis report per node',
     statements: [`ALTER TABLE nodes ADD COLUMN ai_report TEXT`],
+  },
+  {
+    version: 3,
+    description: 'Sync bookkeeping: company id, dirty generation, tombstones, server revision, photo uploads',
+    statements: [
+      ...SYNCED_TABLES.flatMap((t) => [
+        `ALTER TABLE ${t} ADD COLUMN org_id TEXT`,
+        `ALTER TABLE ${t} ADD COLUMN dirty INTEGER NOT NULL DEFAULT 0`,
+        `ALTER TABLE ${t} ADD COLUMN deleted_at TEXT`,
+        `ALTER TABLE ${t} ADD COLUMN server_rev INTEGER`,
+        `ALTER TABLE ${t} ADD COLUMN synced_at TEXT`,
+        `ALTER TABLE ${t} ADD COLUMN sync_error TEXT`,
+        `CREATE INDEX IF NOT EXISTS idx_${t}_sync ON ${t}(org_id, dirty)`,
+      ]),
+      `ALTER TABLE photos ADD COLUMN updated_at TEXT`,
+      `ALTER TABLE photos ADD COLUMN storage_path TEXT`,
+      `ALTER TABLE photos ADD COLUMN watermarked_path TEXT`,
+      `ALTER TABLE photos ADD COLUMN upload_state TEXT`,
+      `CREATE INDEX IF NOT EXISTS idx_photos_upload ON photos(org_id, upload_state)`,
+      `CREATE TABLE IF NOT EXISTS sync_state (
+        org_id TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (org_id, key)
+      )`,
+    ],
   },
 ];
 
